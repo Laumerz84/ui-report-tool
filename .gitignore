@@ -1,0 +1,8 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Test scratch and caches, not source
+.test-output/
+.pytest_cache/
