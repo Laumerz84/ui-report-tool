@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+os.environ["UIREPORT_NO_PASTE"] = "1"  # Finish must never paste into the user's real Claude window during tests
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:

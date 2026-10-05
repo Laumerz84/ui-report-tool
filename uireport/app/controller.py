@@ -16,6 +16,7 @@ from .. import __version__
 from ..hotkeyspec import NAME_CAPTURE, NAME_DELAYED
 from ..models import CaptureMode, Session, Shot, SystemMeta
 from ..output.clipboard import copy_prompt_to_clipboard, render_copy_text
+from . import claude_paste
 from ..output.writer import SessionOutput, write_session
 from ..settings import SettingsStore
 
@@ -24,6 +25,8 @@ log = logging.getLogger("uireport.controller")
 HIDE_SETTLE_MS = 120  # wait after hiding the editor so the compositor has removed it
 TOAST_COPIED = "Copied — paste into Claude"
 TOAST_COPIED_CUSTOM = "Copied to the clipboard"  # the user's own copy text may not be for Claude
+TOAST_PASTED = "Pasted into Claude — press Enter to send"
+TOAST_NOT_PASTED = "Copied — couldn't paste into Claude this time, so press Ctrl+V in its message box"
 TOAST_OPEN_FOLDER = "Open folder"
 CHOICE_FINISH = "finish"
 CHOICE_DISCARD = "discard"
@@ -196,6 +199,8 @@ class AppController(QObject):
         output_root: "Optional[Path | str]" = None,
         confirm_quit: Optional[Callable[[int], str]] = None,
         open_path: Optional[Callable[[str], None]] = None,
+        paste_into_claude: Optional[Callable[[str], str]] = None,
+        prewarm_paste: Optional[Callable[[], None]] = None,
     ) -> None:
         super().__init__(parent)
         self.store = store
@@ -203,6 +208,8 @@ class AppController(QObject):
         self._output_root_override = Path(output_root) if output_root else None
         self._confirm_quit_fn = confirm_quit
         self._open_path_fn = open_path or default_open_path
+        self._paste_fn = paste_into_claude or claude_paste.paste_into_claude
+        self._prewarm_paste_fn = prewarm_paste or claude_paste.prewarm
         self._editor_factory = editor_factory or _default_editor_factory
         self._settings_window_factory = settings_window_factory or _default_settings_window_factory
 
@@ -663,6 +670,12 @@ class AppController(QObject):
         except Exception as exc:  # could not even start the worker
             log.exception("could not start the writer")
             self._on_write_done(None, f"{type(exc).__name__}: {exc}")
+            return
+        if self.store.settings.paste_into_claude:
+            try:  # while the worker writes: find Claude's message box so the paste is instant
+                self._prewarm_paste_fn()
+            except Exception:
+                log.exception("could not look up Claude's message box")
 
     def _on_write_progress(self, done: int, total: int) -> None:
         if self._finishing and total > 1 and done < total:
@@ -686,9 +699,22 @@ class AppController(QObject):
             copy_error = str(exc)
             log.exception("could not copy the prompt")
         folder = result.folder
+        pasted = ""
+        if copied and self.store.settings.paste_into_claude:
+            try:
+                pasted = self._paste_fn(prompt)
+            except Exception:
+                log.exception("could not paste into Claude")
         if copied:
+            if pasted == claude_paste.RESULT_PASTED:
+                message = TOAST_PASTED
+            elif pasted in (claude_paste.RESULT_NOT_FOCUSED, claude_paste.RESULT_NO_PROMPT,
+                            claude_paste.RESULT_NOT_LANDED):
+                message = TOAST_NOT_PASTED
+            else:
+                message = TOAST_COPIED if not template.strip() else TOAST_COPIED_CUSTOM
             self._toast(
-                TOAST_COPIED if not template.strip() else TOAST_COPIED_CUSTOM,
+                message,
                 action_text=TOAST_OPEN_FOLDER,
                 action=lambda: self._open_path(folder),
                 timeout_ms=8000,

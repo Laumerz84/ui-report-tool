@@ -88,6 +88,9 @@ def make_rig(qapp, test_out, monkeypatch):
         r.tray = FakeTray()
         r.toast = FakeToast()
         r.autostart = MemoryAutostart()
+        r.paste_calls = []
+        r.paste_result = "not_open"  # Claude closed: the plain copy behaviour
+        r.prewarm_calls = []
 
         real_start = r.capture.start
 
@@ -131,6 +134,9 @@ def make_rig(qapp, test_out, monkeypatch):
             output_root=output_root,
             confirm_quit=confirm,
             open_path=r.opened.append,
+            paste_into_claude=lambda text: (r.paste_calls.append((text, QGuiApplication.clipboard().text())),
+                                            r.paste_result)[1],
+            prewarm_paste=lambda: r.prewarm_calls.append(len(r.finished)),
         )
         c.session_finished.connect(r.finished.append)
         c.finish_failed.connect(r.failed.append)
@@ -538,6 +544,53 @@ def test_finish_failure_keeps_the_session_and_reopens_the_editor(make_rig, make_
     assert wait_until(lambda: r.finished)
     assert len(list(r.finished[0].folder.glob("*.png"))) == 8
     assert r.controller.session.shots == []
+
+
+def _finish_one(r, make_shot):
+    r.controller.start()
+    add_shots(r, 1, make_shot)
+    r.controller.finish_session()
+    assert wait_until(lambda: r.finished)
+
+
+def test_finish_pastes_into_an_open_claude_after_copying(make_rig, make_shot):
+    r = make_rig()
+    r.paste_result = "pasted"
+    _finish_one(r, make_shot)
+    text, clipboard = r.paste_calls[0]
+    assert len(r.paste_calls) == 1 and text.startswith("I captured 1 screenshot.")
+    assert clipboard == text  # copied before the paste
+    assert r.toast.last["message"] == "Pasted into Claude — press Enter to send"
+    assert r.toast.last["action_text"] == "Open folder"
+
+
+def test_finish_with_claude_closed_just_copies(make_rig, make_shot):
+    r = make_rig()
+    _finish_one(r, make_shot)
+    assert len(r.paste_calls) == 1
+    assert r.toast.last["message"] == COPIED
+
+
+@pytest.mark.parametrize("result", ["not_focused", "no_prompt", "not_landed"])
+def test_finish_says_so_when_the_paste_did_not_happen(make_rig, make_shot, result):
+    r = make_rig()
+    r.paste_result = result
+    _finish_one(r, make_shot)
+    assert r.toast.last["message"] == "Copied — couldn't paste into Claude this time, so press Ctrl+V in its message box"
+
+
+def test_claudes_message_box_is_looked_up_while_the_report_is_written(make_rig, make_shot):
+    r = make_rig()
+    _finish_one(r, make_shot)
+    assert r.prewarm_calls == [0]  # once, before the write finished
+
+
+def test_paste_into_claude_can_be_turned_off(make_rig, make_shot):
+    r = make_rig()
+    r.store.settings.paste_into_claude = False
+    _finish_one(r, make_shot)
+    assert r.paste_calls == [] and r.prewarm_calls == []
+    assert r.toast.last["message"] == COPIED
 
 
 def test_finish_copies_the_users_own_text_when_a_template_is_set(make_rig, make_shot, test_out):

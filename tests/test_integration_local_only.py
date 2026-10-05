@@ -55,6 +55,11 @@ def test_the_application_uses_no_qt_network_or_web_classes():
     assert offenders == {}, offenders
 
 
+# The one deliberate exception: on Finish, a Ctrl+V into the Claude desktop app (only when it is
+# open and verified to be the foreground window). Nothing else may fake input.
+PASTE_MODULE = Path("uireport") / "app" / "claude_paste.py"
+
+
 def test_the_application_never_fakes_mouse_or_keyboard_input_on_the_desktop():
     offenders = {}
     for f in _sources():
@@ -62,9 +67,20 @@ def test_the_application_never_fakes_mouse_or_keyboard_input_on_the_desktop():
         names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)} | {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
         names |= _imported_roots(tree)
         bad = names & INPUT_FAKING_NAMES
+        if f.relative_to(ROOT) == PASTE_MODULE:
+            bad -= {"SendInput"}  # its keyboard Ctrl+V only; still no mouse, cursor or other input
         if bad:
             offenders[str(f.relative_to(ROOT))] = sorted(bad)
     assert offenders == {}, offenders
+
+
+def test_the_paste_exception_sends_only_ctrl_v_and_is_blocked_under_tests():
+    text = (ROOT / PASTE_MODULE).read_text(encoding="utf-8")
+    calls = [n for n in ast.walk(ast.parse(text)) if isinstance(n, ast.Call)
+             and getattr(n.func, "attr", getattr(n.func, "id", None)) == "SendInput"]
+    assert len(calls) == 1  # one call site
+    assert "VK_RETURN" not in text and "0x0D" not in text  # never presses Enter
+    assert os.environ.get("UIREPORT_NO_PASTE") == "1"  # conftest blocks the real paste
 
 
 def test_only_setup_bat_talks_to_the_internet_and_only_through_pip():

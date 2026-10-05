@@ -63,6 +63,7 @@ class Settings:
     last_framework_hint: str = ""
     start_with_windows: bool = False
     copy_text_template: str = ""  # text copied on Finish; "" = the built-in Claude prompt
+    paste_into_claude: bool = True  # on Finish, also paste into the Claude desktop app if it is open
 
     # ---- validation -----------------------------------------------------
     def problems(self) -> list[str]:
@@ -107,6 +108,7 @@ class Settings:
         s.last_framework_hint = str(s.last_framework_hint or "")
         s.start_with_windows = bool(s.start_with_windows)
         s.copy_text_template = str(s.copy_text_template or "")
+        s.paste_into_claude = bool(s.paste_into_claude)
         return s
 
     # ---- (de)serialisation ---------------------------------------------

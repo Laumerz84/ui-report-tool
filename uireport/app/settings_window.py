@@ -251,6 +251,10 @@ class SettingsWindow(QDialog):
         self.copy_text_default.setText("Default")
         self.copy_text_default.setToolTip("Go back to the built-in text for Claude")
         self.copy_text_default.clicked.connect(self.copy_text_edit.clear)
+        self.paste_check = QCheckBox("On Finish, also paste it into the Claude app if it's open (you press Enter)")
+        self.paste_check.setChecked(bool(s.paste_into_claude))
+        self.paste_check.setToolTip("Brings the Claude desktop app to the front and pastes the text into it. "
+                                    "Claude is never started, and nothing is sent until you press Enter.")
 
         form = QFormLayout()
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
@@ -266,6 +270,7 @@ class SettingsWindow(QDialog):
         form.addRow("", self.autostart_check)
         form.addRow("Text copied on Finish", self._with_button(self.copy_text_edit, self.copy_text_default))
         form.addRow("", self.copy_text_help)
+        form.addRow("", self.paste_check)
 
         self.status_label = QLabel()
         self.status_label.setWordWrap(True)
@@ -297,6 +302,7 @@ class SettingsWindow(QDialog):
             edit.textChanged.connect(self._on_changed)
         self.autostart_check.toggled.connect(self._on_changed)
         self.copy_text_edit.textChanged.connect(self._on_changed)
+        self.paste_check.toggled.connect(self._on_changed)
 
         self._revalidate()
 
@@ -348,6 +354,7 @@ class SettingsWindow(QDialog):
             last_project_path=self.project_edit.text().strip(),
             last_framework_hint=self.framework_edit.text().strip(),
             copy_text_template=self.copy_text_edit.toPlainText().strip(),
+            paste_into_claude=self.paste_check.isChecked(),
         )
 
     def problems(self) -> list[str]:

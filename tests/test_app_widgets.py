@@ -337,6 +337,13 @@ def test_settings_window_edits_the_text_copied_on_finish(qapp, store):
     assert w.copy_text_edit.toPlainText() == "" and w.current_settings().copy_text_template == ""
 
 
+def test_settings_window_toggles_paste_into_claude(qapp, store):
+    w = SettingsWindow(store)
+    assert w.paste_check.isChecked() is True  # on by default
+    w.paste_check.setChecked(False)
+    assert w.current_settings().paste_into_claude is False
+
+
 def test_settings_window_altgr_note_is_soft(qapp, store):
     w = SettingsWindow(store)
     assert not w.capture_note.isHidden()  # Ctrl+Alt+S is AltGr+S on Polish/German layouts

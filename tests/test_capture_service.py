@@ -666,7 +666,12 @@ def test_real_wiring_normal_capture_end_to_end(qapp):
         ov = svc._selector.overlays[0]
         w, h = ov.width(), ov.height()
         _drive_drag(svc._selector, w * 0.25, h * 0.25, w * 0.5, h * 0.75)
-        qapp.processEvents()
+        # usually immediate; if a browser happens to sit under the selection on this desktop, its
+        # address is read first (<= URL_WAIT_MAX_S), so wait for the one terminal signal
+        deadline = time.monotonic() + 3.0
+        while not got and time.monotonic() < deadline:
+            qapp.processEvents()
+            time.sleep(0.01)
         assert [g[0] for g in got] == ["captured"], got
         shot = got[0][1]
         assert shot.selection == "region" and shot.capture_mode == CaptureMode.NORMAL
@@ -678,6 +683,12 @@ def test_real_wiring_normal_capture_end_to_end(qapp):
         assert not svc.is_active
     finally:
         svc.cancel()
+        # The app keeps one service for its whole life; this test drops it. Run the deferred
+        # deletes it queued (selector, URL poll timer) first, or a later event loop trips over them.
+        from PySide6.QtCore import QCoreApplication, QEvent
+
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        qapp.processEvents()
 
 
 def test_real_wiring_delayed_capture_counts_down_then_freezes_then_esc_cancels(qapp):

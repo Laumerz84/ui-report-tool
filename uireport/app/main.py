@@ -249,6 +249,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     smoke_dir: Optional[Path] = None
     if args.smoke_test:
         os.environ[BLOCK_ENV] = "1"  # the smoke test must never write the real Run key
+        os.environ["UIREPORT_NO_PASTE"] = "1"  # ... nor paste its fake report into the user's Claude
         if not args.settings_path:  # never fall back to the real settings folder
             smoke_dir = Path(tempfile.mkdtemp(prefix="uireport-smoke-"))
             args.settings_path = str(smoke_dir / "settings.json")

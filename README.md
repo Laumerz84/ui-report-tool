@@ -119,6 +119,7 @@ Right-click the tray icon and choose **Settings**. Everything is saved when you 
 | Reports folder | Where session folders are created (default `%USERPROFILE%\UIReports`). |
 | Project folder, App / framework | Pre-filled into every new session (remembered from your last session). |
 | Start UI Report Tool when I sign in to Windows | Off by default, see below. |
+| On Finish, also paste it into the Claude app if it's open | On by default. If the Claude desktop app is open, Finish brings it to the front and pastes the text into its message box (one Ctrl+V; you press Enter). Claude is never started; if it is closed, or won't come to the front, the text is only copied. |
 | Text copied on Finish | Your own text for the clipboard instead of the built-in Claude prompt. Fill-ins: `{shots}` ("3 screenshots"), `{count}`, `{goal}`, `{report}` (path of report.md), `{folder}`. Empty or **Default** = the built-in prompt. |
 
 ## Start with Windows
