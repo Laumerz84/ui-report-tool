@@ -50,6 +50,19 @@ class Window:
 
 
 @dataclass
+class Pane:
+    """One of a Claude window's chat panes (the app shows up to two side by side)."""
+    hwnd: int
+    name: str  # accessible name of the pane group: "Primary pane" / "Secondary pane"
+    title: str  # the chat shown in it ("" when it isn't showing one)
+    left: int  # screen x, to call them left / right
+
+    @property
+    def key(self) -> tuple:
+        return (self.hwnd, self.name)
+
+
+@dataclass
 class PasteDeps:
     windows: Callable[[], list]  # top-level windows, z-order (topmost first)
     restore: Callable[[int], None]
@@ -58,8 +71,9 @@ class PasteDeps:
     modifiers_down: Callable[[], bool]
     send_ctrl_v: Callable[[], bool]
     sleep: Callable[[float], None]
-    focus_prompt: Callable[[int], bool]  # cursor into Claude's message box; False if there is none
-    prompt_text: Callable[[int], Optional[str]]  # the box's text, None if it can't be read
+    # both take a window hwnd (its first message box) or a Pane.key (that pane's box)
+    focus_prompt: Callable[[object], bool]  # cursor into Claude's message box; False if there is none
+    prompt_text: Callable[[object], Optional[str]]  # the box's text, None if it can't be read
 
 
 def is_claude_desktop(w: Window) -> bool:
@@ -72,12 +86,15 @@ def _blocked() -> bool:
     return os.environ.get(BLOCK_ENV) == "1" or os.environ.get("QT_QPA_PLATFORM", "").lower() == "offscreen"
 
 
-def prewarm() -> None:
+def prewarm(pane: Optional[Pane] = None) -> None:
     """Find Claude's message box ahead of time (called while the report is being written), so
     the paste itself doesn't have to search Claude's accessibility tree."""
     if _blocked():
         return
     try:
+        if pane is not None:
+            _BOX.control(pane.key)
+            return
         target = next((w for w in _windows() if is_claude_desktop(w)), None)
         if target is not None:
             _BOX.control(target.hwnd)
@@ -85,20 +102,70 @@ def prewarm() -> None:
         pass
 
 
+PANE_SUFFIX = " pane"  # the pane groups are named "Primary pane" / "Secondary pane"
+TITLE_SUFFIX = ", rename session"  # each pane's chat-title button: "<title>, rename session"
+
+
+def list_panes() -> list:
+    """The chat panes of every open Claude desktop window (topmost window first, left to right
+    within a window). Read-only: nothing is focused or clicked. [] if Claude isn't open."""
+    if _blocked():
+        return []
+    try:
+        import uiautomation as auto
+    except Exception:  # noqa: BLE001
+        return []
+    out = []
+    for w in _windows():
+        if not is_claude_desktop(w):
+            continue
+        try:
+            root = auto.ControlFromHandle(w.hwnd)
+            found = [c for c, _d in auto.WalkControl(root, maxDepth=22)
+                     if c.ControlTypeName == "GroupControl" and (c.Name or "").endswith(PANE_SUFFIX)]
+            panes = []
+            for group in found:
+                btn = group.ButtonControl(searchDepth=20, Compare=lambda c, _d: (c.Name or "").endswith(TITLE_SUFFIX))
+                title = btn.Name[: -len(TITLE_SUFFIX)] if btn.Exists(0.3, 0.05) else ""
+                panes.append(Pane(hwnd=w.hwnd, name=group.Name, title=title, left=group.BoundingRectangle.left))
+            out.extend(sorted(panes, key=lambda p: p.left))
+        except Exception:  # noqa: BLE001 - an unreadable window just isn't offered
+            continue
+    return out
+
+
+def pane_labels(panes: list) -> list:
+    """Menu text for each pane: 'Left: <chat>' / 'Right: <chat>', 'Window 2 ...' when there are several."""
+    hwnds = list(dict.fromkeys(p.hwnd for p in panes))
+    labels = []
+    for p in panes:
+        same = [q for q in panes if q.hwnd == p.hwnd]
+        side = "" if len(same) == 1 else ("Left" if p is same[0] else "Right" if p is same[-1] else "Middle")
+        where = (f"Window {hwnds.index(p.hwnd) + 1} " if len(hwnds) > 1 else "") + side
+        where = where.strip() or "Claude"
+        labels.append(f"{where}: {p.title or '(no chat open)'}")
+    return labels
+
+
 def _norm(text: str) -> str:
     return " ".join(str(text).split())  # the message box turns newlines into paragraphs
 
 
-def paste_into_claude(text: str, deps: Optional[PasteDeps] = None) -> str:
-    """Bring an open Claude desktop window forward, put the cursor in its message box and press
-    Ctrl+V once (`text` is what is on the clipboard). Returns a RESULT_*."""
+def paste_into_claude(text: str, deps: Optional[PasteDeps] = None, pane: Optional[Pane] = None) -> str:
+    """Bring an open Claude desktop window forward, put the cursor in its message box (or in
+    `pane`'s, when given) and press Ctrl+V once (`text` is what is on the clipboard).
+    Returns a RESULT_*."""
     if deps is None:
         if _blocked():
             return RESULT_DISABLED
         deps = default_deps()
-    target = next((w for w in deps.windows() if is_claude_desktop(w)), None)
+    claude = [w for w in deps.windows() if is_claude_desktop(w)]
+    if pane is not None:
+        claude = [w for w in claude if w.hwnd == pane.hwnd]
+    target = claude[0] if claude else None
     if target is None:
         return RESULT_NOT_OPEN
+    box = pane.key if pane is not None else target.hwnd
     if target.iconic:
         deps.restore(target.hwnd)
     deps.focus(target.hwnd)
@@ -114,20 +181,20 @@ def paste_into_claude(text: str, deps: Optional[PasteDeps] = None) -> str:
         deps.sleep(STEP_S)
     else:
         return RESULT_NOT_FOCUSED  # Ctrl+V plus a held Shift/Alt would be a different command
-    if not deps.focus_prompt(target.hwnd):
+    if not deps.focus_prompt(box):
         return RESULT_NO_PROMPT
     deps.sleep(CARET_SETTLE_S)
     if deps.foreground() != target.hwnd:
         return RESULT_NOT_FOCUSED
     want = _norm(text)[:VERIFY_CHARS]
-    before = deps.prompt_text(target.hwnd)
+    before = deps.prompt_text(box)
     if not deps.send_ctrl_v():
         return RESULT_NOT_FOCUSED
     if not want or before is None:
         return RESULT_PASTED  # nothing to check against: trust the keystroke
     had = _norm(before).count(want)
     for _ in range(VERIFY_STEPS):
-        now = deps.prompt_text(target.hwnd)
+        now = deps.prompt_text(box)
         if now is not None and _norm(now).count(want) > had:
             return RESULT_PASTED
         deps.sleep(STEP_S)
@@ -199,11 +266,18 @@ def _pumping_sleep(seconds: float) -> None:
         time.sleep(min(0.01, left))
 
 
-def _search_prompt(hwnd: int):
-    """Claude's message box in window `hwnd` via UI Automation (about 0.2 s), or None."""
+def _search_prompt(key):
+    """Claude's message box via UI Automation (about 0.2 s), or None. `key` is a window hwnd
+    (its first box) or a Pane.key (hwnd, pane name) for that pane's box."""
     import uiautomation as auto
 
-    root = auto.ControlFromHandle(hwnd)
+    if isinstance(key, tuple):
+        hwnd, pane_name = key
+        root = auto.ControlFromHandle(hwnd).GroupControl(Name=pane_name, searchDepth=25)
+        if not root.Exists(1.0, 0.05):
+            return None
+    else:
+        root = auto.ControlFromHandle(key)
     box = root.EditControl(Name=PROMPT_NAME, searchDepth=40)
     if box.Exists(1.5, 0.05):  # the first query also wakes Chromium's accessibility tree
         return box
@@ -225,22 +299,22 @@ class _PromptBox:
 
     def __init__(self, search: Callable = _search_prompt, is_valid: Callable = _prompt_still_valid) -> None:
         self._search, self._is_valid = search, is_valid
-        self._found: dict[int, object] = {}
+        self._found: dict[object, object] = {}  # hwnd or Pane.key -> box
 
-    def control(self, hwnd: int):
-        box = self._found.get(hwnd)
+    def control(self, key):
+        box = self._found.get(key)
         if box is not None and self._is_valid(box):
             return box
-        box = self._search(hwnd)
+        box = self._search(key)
         if box is None:
-            self._found.pop(hwnd, None)
+            self._found.pop(key, None)
         else:
-            self._found[hwnd] = box
+            self._found[key] = box
         return box
 
-    def focus(self, hwnd: int) -> bool:
+    def focus(self, key) -> bool:
         try:
-            box = self.control(hwnd)
+            box = self.control(key)
             if box is None:
                 return False
             box.SetFocus()
@@ -248,9 +322,9 @@ class _PromptBox:
         except Exception:  # noqa: BLE001 - accessibility hiccups mean "no box", never a crash
             return False
 
-    def text(self, hwnd: int) -> Optional[str]:
+    def text(self, key) -> Optional[str]:
         try:
-            box = self.control(hwnd)
+            box = self.control(key)
             return None if box is None else box.GetValuePattern().Value
         except Exception:  # noqa: BLE001
             return None

@@ -74,6 +74,7 @@ Change them in **Settings**: click a hotkey field and press the new combination.
 | **Ctrl+Enter** | *Next*: save this shot and start a normal capture for the next one |
 | **Ctrl+Alt+Enter** | *Next (delayed)*: save this shot and start a delayed capture |
 | **Ctrl+Shift+Enter** | *Finish*: save the report and copy the prompt |
+| **Ctrl+Alt+Shift+Enter** | *Finish to...*: like Finish, but first pick which open Claude pane (left / right in split view) to paste into, with the arrow keys and Enter (Esc cancels). With one pane it pastes straight there; it pastes even if the paste-on-Finish option is off |
 | **Esc** | in the region selector or during the countdown: cancel that capture (your session is kept) |
 
 Alt+1 to Alt+4 set the role. Click a thumbnail to re-edit that shot, drag thumbnails to reorder, use

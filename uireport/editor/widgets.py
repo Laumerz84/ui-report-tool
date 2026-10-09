@@ -100,9 +100,11 @@ class EnterShortcutFilter(QObject):
         on_delayed: Callable[[], None],
         on_finish: Callable[[], None],
         parent: Optional[QObject] = None,
+        on_finish_to: Optional[Callable[[], None]] = None,
     ) -> None:
         super().__init__(parent)
         self._next, self._delayed, self._finish = on_next, on_delayed, on_finish
+        self._finish_to = on_finish_to
 
     def eventFilter(self, obj: QObject, ev: QEvent) -> bool:  # noqa: N802
         if ev.type() == QEvent.Type.KeyPress and ev.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):  # type: ignore[attr-defined]
@@ -111,7 +113,9 @@ class EnterShortcutFilter(QObject):
             alt = bool(mods & Qt.KeyboardModifier.AltModifier)
             shift = bool(mods & Qt.KeyboardModifier.ShiftModifier)
             handler = None
-            if ctrl and alt and not shift:
+            if ctrl and alt and shift:
+                handler = self._finish_to
+            elif ctrl and alt and not shift:
                 handler = self._delayed
             elif ctrl and shift and not alt:
                 handler = self._finish

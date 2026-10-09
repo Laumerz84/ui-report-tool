@@ -46,6 +46,7 @@ class EditorWindow(QMainWindow):
         Next            Ctrl+Enter        -> next_requested
         Next (delayed)  Ctrl+Alt+Enter    -> next_delayed_requested
         Finish          Ctrl+Shift+Enter  -> finish_requested (disabled while session has no shots)
+        Finish to...    Ctrl+Alt+Shift+Enter -> finish_to_requested (pick which Claude pane to paste into)
     Role toggle: four one-click buttons Problem / Want / Context / After (default Problem,
     tooltips = Role.description), Alt+1..4. Tool shortcuts only when the canvas has focus.
     Closing the window (X) just hides it: the session and its shots are kept; it is not
@@ -56,6 +57,7 @@ class EditorWindow(QMainWindow):
         next_requested()
         next_delayed_requested()
         finish_requested()
+        finish_to_requested()
         discard_session_requested()
         session_changed()   any mutation: caption/role/annotation/session field/reorder/delete
 
@@ -67,6 +69,7 @@ class EditorWindow(QMainWindow):
     next_requested = Signal()
     next_delayed_requested = Signal()
     finish_requested = Signal()
+    finish_to_requested = Signal()
     discard_session_requested = Signal()
     session_changed = Signal()
 
@@ -192,7 +195,8 @@ class EditorWindow(QMainWindow):
             "Keep this shot, show a countdown, then capture the next one (open menus / hover states first)"
         )
         self.finish_button = QPushButton("Finish  (Ctrl+Shift+Enter)", self)
-        self.finish_button.setToolTip("Save every shot and build the report")
+        self.finish_button.setToolTip(
+            "Save every shot and build the report (Ctrl+Alt+Shift+Enter: choose which Claude pane to paste into)")
         self.finish_button.setStyleSheet("QPushButton { font-weight: 600; }")  # inherits the size, only bolds
         self.shot_label = QLabel("", self)
         row.addWidget(self.discard_button)
@@ -230,10 +234,12 @@ class EditorWindow(QMainWindow):
             bind(f"Ctrl+{key}", self._do_next)
             bind(f"Ctrl+Alt+{key}", self._do_next_delayed)
             bind(f"Ctrl+Shift+{key}", self._do_finish)
+            bind(f"Ctrl+Alt+Shift+{key}", self._do_finish_to)
         for i, role in enumerate(ROLE_ORDER, start=1):
             bind(f"Alt+{i}", lambda r=role: self._set_role_from_key(r))
         # multi-line boxes: make sure the same keys are never taken as text
-        self._enter_filter = EnterShortcutFilter(self._do_next, self._do_next_delayed, self._do_finish, self)
+        self._enter_filter = EnterShortcutFilter(self._do_next, self._do_next_delayed, self._do_finish, self,
+                                                 on_finish_to=self._do_finish_to)
         for w in (self.caption_edit, self.fields.goal_edit, self.fields.expected_edit, self.fields.actual_edit):
             w.installEventFilter(self._enter_filter)
 
@@ -426,7 +432,8 @@ class EditorWindow(QMainWindow):
         n = len(shots)
         self.finish_button.setEnabled(n > 0)
         self.finish_button.setToolTip(
-            "Save every shot and build the report" if n else "Take at least one screenshot first"
+            "Save every shot and build the report (Ctrl+Alt+Shift+Enter: choose which Claude pane to paste into)"
+            if n else "Take at least one screenshot first"
         )
         if self._current_id is not None and self._session.get_shot(self._current_id) is not None:
             i = self._session.index_of(self._current_id) + 1
@@ -553,6 +560,12 @@ class EditorWindow(QMainWindow):
             return
         self._flush()
         self.finish_requested.emit()
+
+    def _do_finish_to(self) -> None:
+        if not self.finish_button.isEnabled():
+            return
+        self._flush()
+        self.finish_to_requested.emit()
 
     def _on_discard(self) -> None:
         self._flush_pending()

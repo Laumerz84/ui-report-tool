@@ -201,6 +201,8 @@ class AppController(QObject):
         open_path: Optional[Callable[[str], None]] = None,
         paste_into_claude: Optional[Callable[[str], str]] = None,
         prewarm_paste: Optional[Callable[[], None]] = None,
+        list_panes: Optional[Callable[[], list]] = None,
+        pick_pane: Optional[Callable[[list], Optional[Any]]] = None,
     ) -> None:
         super().__init__(parent)
         self.store = store
@@ -210,6 +212,9 @@ class AppController(QObject):
         self._open_path_fn = open_path or default_open_path
         self._paste_fn = paste_into_claude or claude_paste.paste_into_claude
         self._prewarm_paste_fn = prewarm_paste or claude_paste.prewarm
+        self._list_panes_fn = list_panes or claude_paste.list_panes
+        self._pick_pane_fn = pick_pane or self._pick_pane_menu
+        self._paste_pane: Optional[claude_paste.Pane] = None  # set by Finish to...: paste into this pane
         self._editor_factory = editor_factory or _default_editor_factory
         self._settings_window_factory = settings_window_factory or _default_settings_window_factory
 
@@ -432,6 +437,7 @@ class AppController(QObject):
             editor.next_requested.connect(self._on_editor_next)
             editor.next_delayed_requested.connect(self._on_editor_next_delayed)
             editor.finish_requested.connect(self.finish_session)
+            editor.finish_to_requested.connect(self.finish_session_to)
             editor.discard_session_requested.connect(self.discard_session)
             editor.session_changed.connect(self._on_session_changed)
             self._editor = editor
@@ -634,7 +640,49 @@ class AppController(QObject):
         self._sync_tray()
 
     # ------------------------------------------------------------------ finish (F7)
-    def finish_session(self) -> None:
+    def finish_session_to(self) -> None:
+        """Finish, pasting into a Claude pane the user picks (Ctrl+Alt+Shift+Enter). With one
+        pane open there is nothing to choose; with none, it is a plain Finish (copy only).
+        Esc in the picker cancels and leaves the editor as it was."""
+        if self._finishing or self._shut_down or not self._session.shots:
+            return
+        try:
+            panes = self._list_panes_fn()
+        except Exception:
+            log.exception("could not list Claude's panes")
+            panes = []
+        if not panes:
+            self.finish_session()
+            return
+        pane = panes[0] if len(panes) == 1 else self._pick_pane_fn(panes)
+        if pane is None:
+            return
+        self.finish_session(pane=pane)
+
+    def _pick_pane_menu(self, panes: list) -> Optional[Any]:
+        """A keyboard menu over the editor: arrow keys + Enter (or 1-9), Esc cancels."""
+        from PySide6.QtGui import QCursor
+        from PySide6.QtWidgets import QMenu
+
+        parent = self._editor if self._editor is not None else None
+        menu = QMenu(parent)
+        menu.setToolTipsVisible(True)
+        title = menu.addAction("Paste the report into...")
+        title.setEnabled(False)
+        actions = []
+        for i, label in enumerate(claude_paste.pane_labels(panes), start=1):
+            text = (f"&{i}  " if i < 10 else "    ") + label.replace("&", "&&")
+            actions.append(menu.addAction(text))
+        menu.setActiveAction(actions[0])
+        if parent is not None and parent.isVisible():
+            geo = parent.frameGeometry()
+            pos = geo.center() - menu.sizeHint().center()
+        else:
+            pos = QCursor.pos()
+        chosen = menu.exec(pos)
+        return panes[actions.index(chosen)] if chosen in actions else None
+
+    def finish_session(self, pane: Optional[claude_paste.Pane] = None) -> None:
         """Finish: no-op if the session has no shots. Otherwise refresh session.system, remember
         project path/framework (store.save()), hide the editor, write the session on a worker
         thread (write_session), then on the GUI thread: copy the prompt, show the toast
@@ -647,6 +695,7 @@ class AppController(QObject):
         if not session.shots:
             return
         self._finishing = True
+        self._paste_pane = pane if isinstance(pane, claude_paste.Pane) else None
         self._settle_timer.stop()
         self._pending_mode = None
         self._resume_shot_id = self._current_shot_id()  # where to come back to if the save fails
@@ -671,9 +720,12 @@ class AppController(QObject):
             log.exception("could not start the writer")
             self._on_write_done(None, f"{type(exc).__name__}: {exc}")
             return
-        if self.store.settings.paste_into_claude:
+        if self._paste_pane is not None or self.store.settings.paste_into_claude:
             try:  # while the worker writes: find Claude's message box so the paste is instant
-                self._prewarm_paste_fn()
+                if self._paste_pane is not None:
+                    self._prewarm_paste_fn(self._paste_pane)
+                else:
+                    self._prewarm_paste_fn()
             except Exception:
                 log.exception("could not look up Claude's message box")
 
@@ -684,6 +736,7 @@ class AppController(QObject):
     def _on_write_done(self, result: Optional[SessionOutput], error: str) -> None:
         self._write_job = None
         self._finishing = False
+        pane, self._paste_pane = self._paste_pane, None
         if error or result is None:
             self._finish_failed(error or "unknown error")
             return
@@ -700,9 +753,9 @@ class AppController(QObject):
             log.exception("could not copy the prompt")
         folder = result.folder
         pasted = ""
-        if copied and self.store.settings.paste_into_claude:
-            try:
-                pasted = self._paste_fn(prompt)
+        if copied and (pane is not None or self.store.settings.paste_into_claude):
+            try:  # a picked pane is pasted into even with the "paste on Finish" option off
+                pasted = self._paste_fn(prompt, pane=pane) if pane is not None else self._paste_fn(prompt)
             except Exception:
                 log.exception("could not paste into Claude")
         if copied:
