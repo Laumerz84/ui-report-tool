@@ -94,7 +94,9 @@ _LEGEND = (
     "*Problem* = what is wrong now; *Want* = a "
     "reference/mockup of the target; *Context* = orientation only; *After* = the result after a "
     "fix, to verify it. Coordinates are pixels of the ORIGINAL image (top-left origin, x right, "
-    "y down). Open every image listed below (annotated and original)."
+    "y down). Open every image listed below (annotated and original). Before answering, quote "
+    "back word for word the text the user wrote for each shot (its caption and any annotation "
+    "labels), or say that a shot has none."
 )
 
 

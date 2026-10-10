@@ -216,7 +216,9 @@ All paths written into reports are **absolute, backslash form**. Files are UTF-8
 
 **How to read this:** shots are in order. *Problem* = what is wrong now; *Want* = a reference/mockup of the
 target; *Context* = orientation only; *After* = the result after a fix, to verify it. Coordinates are pixels of the
-ORIGINAL image (top-left origin). Open every image listed below (annotated and original).
+ORIGINAL image (top-left origin). Open every image listed below (annotated and original). Before answering,
+quote back word for word the text the user wrote for each shot (its caption and any annotation labels), or say
+that a shot has none.
 
 ## 1. [Problem] Save button text is clipped
 - **Caption:** Save button text is clipped
