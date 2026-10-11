@@ -145,13 +145,20 @@ class ClaudeRun(QObject):
         self.status.emit("Starting Claude...")
         gen, proc = self._gen, self.proc
 
-        def pump() -> None:
-            err = b""
+        def feed() -> None:
             try:
                 proc.stdin.write(message)
                 proc.stdin.close()
             except OSError:
                 pass
+
+        def pump() -> None:
+            err = b""
+            # The message (with screenshots: hundreds of KB) goes in on its own thread while stdout is
+            # read here from the start. Writing it all first deadlocks: Claude prints its startup
+            # events (hooks, init) before it has read all of stdin, fills the stdout pipe and waits
+            # for us, while we wait for it to take the rest of stdin.
+            threading.Thread(target=feed, name="show-claude-feed", daemon=True).start()
 
             def drain() -> None:
                 nonlocal err
