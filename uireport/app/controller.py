@@ -228,6 +228,7 @@ class AppController(QObject):
         self._settings_window: Optional[Any] = None
         self._resume_shot_id: Optional[str] = None
         self._capture_for_chat = False  # the running capture came from the Show Claude hotkey
+        self._chat_editor_was_open = False
         self._chat_window: Optional[Any] = None
         self._pending_mode: Optional[CaptureMode] = None
         self._finishing = False
@@ -544,7 +545,14 @@ class AppController(QObject):
         if self._shut_down or self._capture_busy():
             return
         self._capture_for_chat = True
+        self._chat_editor_was_open = self._editor_visible()
         self.request_capture(CaptureMode.NORMAL)
+
+    def _end_chat_capture(self) -> None:
+        """After a chat capture (sent, cancelled or failed): the report editor comes back only if it was open."""
+        self._capture_for_chat = False
+        if self._chat_editor_was_open:
+            self._restore_editor()
 
     def chat_window(self) -> Any:
         if self._chat_window is None:
@@ -606,10 +614,12 @@ class AppController(QObject):
             started = self.capture.start(mode)
         except Exception as exc:
             log.exception("capture.start failed")
+            self._capture_for_chat = False
             self._toast(f"Could not start the capture: {exc}", error=True, timeout_ms=12000)
             self._restore_editor()
             return
         if started is False:
+            self._capture_for_chat = False
             log.debug("capture.start refused (a capture is already active)")
 
     def _on_captured(self, shot: Shot) -> None:
@@ -617,8 +627,7 @@ class AppController(QObject):
         if self._shut_down:
             return
         if self._capture_for_chat:
-            self._capture_for_chat = False
-            self._restore_editor()  # a report session in progress comes back as it was
+            self._end_chat_capture()
             try:
                 self.chat_window().send_screenshot(shot.image, shot.window)
             except Exception as exc:
@@ -634,7 +643,9 @@ class AppController(QObject):
         """F4: nothing added; back to the shot that was open (or idle in the tray)."""
         if self._shut_down:
             return
-        self._capture_for_chat = False
+        if self._capture_for_chat:
+            self._end_chat_capture()
+            return
         self._restore_editor()
 
     def _on_failed(self, message: str) -> None:
@@ -642,8 +653,10 @@ class AppController(QObject):
         if self._shut_down:
             return
         log.error("capture failed: %s", message)
-        self._capture_for_chat = False
         self._toast(f"Capture failed: {message}", error=True, timeout_ms=10000)
+        if self._capture_for_chat:
+            self._end_chat_capture()
+            return
         self._restore_editor()
 
     # ------------------------------------------------------------------ session (F8-F12)

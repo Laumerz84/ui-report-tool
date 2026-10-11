@@ -120,7 +120,8 @@ class ClaudeRun(QObject):
             self._cfg = self.approval_dir / f"mcp-{os.getpid()}-{self._gen}.json"
             self._cfg.write_text(json.dumps({"mcpServers": {"uireport": {
                 "type": "stdio", "command": console_python(), "args": [str(APPROVE_SCRIPT)],
-                "env": {"UIREPORT_APPROVAL_DIR": str(self.approval_dir)}}}}), encoding="utf-8")
+                "env": {"UIREPORT_APPROVAL_DIR": str(self.approval_dir), "PYTHONUTF8": "1"}}}}),
+                encoding="utf-8")
         except OSError as exc:
             return f"Couldn't prepare the approval step: {exc}"
         args = cmd + ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
@@ -185,8 +186,8 @@ class ClaudeRun(QObject):
 
     # ---- stream-json events -------------------------------------------------------------------
     def _on_line(self, gen: int, line: str) -> None:
-        if gen != self._gen or self.proc is None:
-            return
+        if gen != self._gen or self.proc is None or self._stopped:
+            return  # a stopped run's queued lines must not leak into the next chat
         try:
             ev = json.loads(line)
         except ValueError:

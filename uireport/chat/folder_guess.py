@@ -25,11 +25,15 @@ def known_folders(session_cwds: Iterable[str] = ()) -> list[str]:
     except (OSError, ValueError):
         pass
     raw += [c for c in session_cwds if c]
+    home = os.path.normpath(str(Path.home())).lower()
+    claude_dir = os.path.join(home, ".claude")
     out, seen = [], set()
     for folder in raw:
         norm = os.path.normpath(folder)
         key = norm.lower()
-        if key in seen or any(s in key + "\\" for s in _SKIP) or not os.path.isdir(norm):
+        too_broad = (home == key or home.startswith(key.rstrip("\\") + "\\") or len(key) <= 3
+                     or key == claude_dir or key.startswith(claude_dir + "\\"))
+        if too_broad or key in seen or any(s in key + "\\" for s in _SKIP) or not os.path.isdir(norm):
             continue
         seen.add(key)
         out.append(norm)

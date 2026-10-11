@@ -53,7 +53,13 @@ class ApprovalWatcher(QObject):
         self._timer.start()
 
     def _poll(self) -> None:
-        for req in sorted(self.folder.glob("*.request.json"), key=lambda p: p.stat().st_mtime if p.exists() else 0):
+        def mtime(p: Path) -> float:
+            try:
+                return p.stat().st_mtime
+            except OSError:  # the server removed it between glob and stat
+                return 0.0
+
+        for req in sorted(self.folder.glob("*.request.json"), key=mtime):
             rid = req.name[: -len(".request.json")]
             if rid in self._seen:
                 continue

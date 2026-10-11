@@ -88,6 +88,10 @@ def handle(msg):
 
 
 def main():
+    # Claude Code speaks UTF-8; Python's pipe default here is the ANSI code page (cp1252), which
+    # would garble every non-ASCII character in an approved edit or command.
+    sys.stdin.reconfigure(encoding="utf-8")
+    sys.stdout.reconfigure(encoding="utf-8")
     for line in sys.stdin:
         line = line.strip()
         if not line:

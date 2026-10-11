@@ -345,10 +345,18 @@ class ChatWindow(QWidget):
         bar.setValue(bar.maximum())
 
     def _present(self) -> None:
+        if self.isMinimized():
+            self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMinimized)
         self.show()
         self.raise_()
         self.activateWindow()
         self.input.setFocus()
+
+    def showEvent(self, ev) -> None:  # noqa: N802 - keep this always-on-top window out of every capture
+        super().showEvent(ev)
+        from ..capture.winapi import exclude_from_capture
+
+        exclude_from_capture(int(self.winId()))
 
     def closeEvent(self, ev: QCloseEvent) -> None:  # noqa: N802 - closing only hides; the chat stays
         ev.ignore()
