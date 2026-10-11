@@ -17,6 +17,7 @@ from ..hotkeyspec import NAME_CAPTURE, NAME_DELAYED
 from ..models import CaptureMode, Session, Shot, SystemMeta
 from ..output.clipboard import copy_prompt_to_clipboard, render_copy_text
 from . import claude_paste
+from . import ekxel_link
 from ..output.writer import SessionOutput, write_session
 from ..settings import SettingsStore
 
@@ -26,6 +27,7 @@ HIDE_SETTLE_MS = 120  # wait after hiding the editor so the compositor has remov
 TOAST_COPIED = "Copied — paste into Claude"
 TOAST_COPIED_CUSTOM = "Copied to the clipboard"  # the user's own copy text may not be for Claude
 TOAST_PASTED = "Pasted into Claude — press Enter to send"
+TOAST_EKXEL = "Sent to Ekxel's Claude (Ekxel was used more recently than Claude)"
 TOAST_NOT_PASTED = "Copied — couldn't paste into Claude this time, so press Ctrl+V in its message box"
 TOAST_OPEN_FOLDER = "Open folder"
 CHOICE_FINISH = "finish"
@@ -215,6 +217,9 @@ class AppController(QObject):
         self._list_panes_fn = list_panes or claude_paste.list_panes
         self._pick_pane_fn = pick_pane or self._pick_pane_menu
         self._paste_pane: Optional[claude_paste.Pane] = None  # set by Finish to...: paste into this pane
+        # Finish sends to Ekxel's Claude panel instead when Ekxel was used more recently (ekxel_link.py)
+        self._ekxel_focus = ekxel_link.FocusTracker(self)
+        self._send_to_ekxel_fn = ekxel_link.send_to_ekxel
         self._editor_factory = editor_factory or _default_editor_factory
         self._settings_window_factory = settings_window_factory or _default_settings_window_factory
 
@@ -753,13 +758,24 @@ class AppController(QObject):
             log.exception("could not copy the prompt")
         folder = result.folder
         pasted = ""
-        if copied and (pane is not None or self.store.settings.paste_into_claude):
+        to_ekxel = False
+        if (copied and pane is None and self.store.settings.paste_into_claude
+                and self._ekxel_focus.prefer_ekxel()):
+            try:
+                to_ekxel = self._send_to_ekxel_fn(prompt, str(folder))
+            except Exception:
+                log.exception("could not send the report to Ekxel")
+        if to_ekxel:
+            pass
+        elif copied and (pane is not None or self.store.settings.paste_into_claude):
             try:  # a picked pane is pasted into even with the "paste on Finish" option off
                 pasted = self._paste_fn(prompt, pane=pane) if pane is not None else self._paste_fn(prompt)
             except Exception:
                 log.exception("could not paste into Claude")
         if copied:
-            if pasted == claude_paste.RESULT_PASTED:
+            if to_ekxel:
+                message = TOAST_EKXEL
+            elif pasted == claude_paste.RESULT_PASTED:
                 message = TOAST_PASTED
             elif pasted in (claude_paste.RESULT_NOT_FOCUSED, claude_paste.RESULT_NO_PROMPT,
                             claude_paste.RESULT_NOT_LANDED):
