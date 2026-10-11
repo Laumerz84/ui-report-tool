@@ -359,3 +359,21 @@ an optional addition or a clarification of behaviour.
 * Reading a UI Automation element of a window created a few milliseconds earlier intermittently blocks for UIA's internal
   3 s timeout (measured 4 of 40); a settled or long-lived window never does (0 of 70). The test host window therefore settles
   0.5 s before it is read. Production reads long-lived browser windows and has a hard 1.5 s limit anyway.
+
+## 12. Show Claude chat (added 2026-10-11; spec: docs/superpowers/specs/2026-10-11-show-claude-chat-design.md)
+
+* Hotkey name `chat` (`hotkeyspec.NAME_CHAT`), setting `hotkey_chat` (default `Ctrl+Alt+Shift+C`). It starts a NORMAL
+  capture with `AppController._capture_for_chat` set; `_on_captured` then hands `shot.image` and `shot.window` to
+  `ChatWindow.send_screenshot()` and restores the editor instead of adding the shot to the report session. The cancel and
+  fail paths clear the flag. Reports, Finish and the paste are unchanged.
+* `uireport/chat/runner.py`: one `claude -p` per turn (stream-json in/out, images as base64 PNG content blocks, at most 1568 px),
+  in the chosen folder; `--resume <id>` for this window's own sessions, `--resume <id> --fork-session` for any other session.
+  Pre-allowed tools: Read, Glob, Grep, WebSearch, WebFetch, TodoWrite; everything else goes through
+  `--permission-prompt-tool mcp__uireport__approve`.
+* `uireport/chat/approve_mcp.py`: stdlib stdio MCP server (run by Claude Code with the venv's python.exe). Request/answer files
+  `<id>.request.json` / `<id>.answer.json` in `<settings dir>\chat\approvals`; 10 minutes or any error = deny. No sockets, so
+  the local-only rule (section 9) still holds for the app's own code; only the `claude` process talks to Anthropic.
+* `uireport/chat/sessions.py`: History from `~\.claude\projects\*\*.jsonl` (head/tail reads; the session's cwd is the LATEST
+  cwd in the file). `own_sessions.json` in the chat folder lists this window's session ids.
+* `uireport/chat/folder_guess.py`: candidates = sibling `codebase-dashboard\recent.json` + session cwds (scratch/temp/AppData
+  dropped); match the window's exe path, command-line paths, or a folder name in its title; else the last folder, else home.

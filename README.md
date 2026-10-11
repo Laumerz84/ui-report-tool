@@ -57,6 +57,7 @@ Hover over the icon to see the hotkeys and the number of shots in the current se
 |---|---|
 | Capture | **Ctrl+Alt+S** |
 | Delayed capture | **Ctrl+Alt+D** |
+| Show Claude (chat) | **Ctrl+Alt+Shift+C** |
 
 (`Win+Shift+S` is Windows' own Snipping Tool, so it is not used.)
 Change them in **Settings**: click a hotkey field and press the new combination. The delay length
@@ -97,6 +98,26 @@ brings it back.
 
 Redactions are applied to **both** images. The folder name is the date, time and a short name taken
 from your goal (or the first caption). You can change the reports folder in Settings.
+
+## Show Claude: the instant chat
+
+For a quick look without a report, press **Ctrl+Alt+Shift+C** anywhere. The screen freezes as
+usual: drag a region, click a window, or press `F` for the whole screen. The moment you let go,
+the **Show Claude** window pops up with the screenshot already sent to your Claude Code, and the
+answer streams in. Keep typing to continue; press the hotkey again to add another screenshot to
+the same conversation. Text you type *before* pressing the hotkey goes along with the screenshot.
+
+- **Project folder** (dropdown at the top): where Claude works. It's guessed from the captured
+  window (your own apps map to their folders), otherwise the last one used. Changing it starts a
+  new chat.
+- **Claude can work on the project**: reading and searching run directly; editing files, running
+  commands and anything else show an **Allow / Always allow / Deny** card first. No answer in
+  10 minutes counts as deny.
+- **History** lists your recent Claude Code conversations, including the Claude app's Code-tab
+  chats. Opening one from elsewhere continues it **as a copy**, so the original isn't touched.
+- **New chat** starts over; **Stop** ends a long answer; closing the window only hides it.
+
+It needs Claude Code installed and signed in (`claude` in a terminal once). No API key.
 
 ## The paste prompt
 

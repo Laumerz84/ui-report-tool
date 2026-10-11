@@ -77,6 +77,10 @@ Context / After.
   Claude forward and pastes into its message box. It never presses Enter; the user sends.
   In split view, **Ctrl+Alt+Shift+Enter** in the editor lets the user pick the left or right
   pane.
+- **Show Claude chat (Ctrl+Alt+Shift+C):** no report and no paste. The screenshot goes straight
+  into a chat window that runs the user's Claude Code headless (`uireport/chat/`), with a
+  `[Screenshot: <window title> - <app>]` line. Approvals come through `approve_mcp.py` as files in
+  `%APPDATA%\UIReportTool\chat\approvals\`.
 - **Claude Code in a terminal / IDE:** the prompt is only copied. The user pastes it with Ctrl+V.
 - The user can replace the prompt text in Settings (*Text copied on Finish*). Fill-ins:
   `{shots} {count} {goal} {report} {folder}`.
