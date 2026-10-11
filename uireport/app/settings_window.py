@@ -41,6 +41,7 @@ from ..settings import (
     DEFAULT_DELAY_SECONDS,
     DEFAULT_HOTKEY_CAPTURE,
     DEFAULT_HOTKEY_DELAYED,
+    DEFAULT_HOTKEY_CHAT,
     MAX_DELAY_SECONDS,
     MIN_DELAY_SECONDS,
     Settings,
@@ -216,6 +217,10 @@ class SettingsWindow(QDialog):
         self.delayed_note = self._note_label()
         self.capture_default = self._default_button(self.capture_edit, DEFAULT_HOTKEY_CAPTURE)
         self.delayed_default = self._default_button(self.delayed_edit, DEFAULT_HOTKEY_DELAYED)
+        self.chat_edit = HotkeyEdit(s.hotkey_chat)
+        self.chat_note = self._note_label()
+        self.chat_default = self._default_button(self.chat_edit, DEFAULT_HOTKEY_CHAT)
+        self.chat_edit.setToolTip("Capture straight into the Show Claude chat window (no report).")
 
         # -- delay
         self.delay_spin = QSpinBox()
@@ -263,6 +268,8 @@ class SettingsWindow(QDialog):
         form.addRow("", self.capture_note)
         form.addRow("Delayed capture hotkey", self._with_button(self.delayed_edit, self.delayed_default))
         form.addRow("", self.delayed_note)
+        form.addRow("Show Claude hotkey", self._with_button(self.chat_edit, self.chat_default))
+        form.addRow("", self.chat_note)
         form.addRow("Delay length", self.delay_spin)
         form.addRow("Reports folder", self._with_button(self.output_edit, self.output_browse))
         form.addRow("Project folder", self._with_button(self.project_edit, self.project_browse))
@@ -294,7 +301,7 @@ class SettingsWindow(QDialog):
         root.addWidget(self.status_label)
         root.addWidget(self.buttons)
 
-        for edit in (self.capture_edit, self.delayed_edit):
+        for edit in (self.capture_edit, self.delayed_edit, self.chat_edit):
             edit.hotkey_changed.connect(self._on_changed)
             edit.recording_changed.connect(self._on_recording_changed)
         self.delay_spin.valueChanged.connect(self._on_changed)
@@ -348,6 +355,7 @@ class SettingsWindow(QDialog):
             self._store.settings,
             hotkey_capture=hk(self.capture_edit),
             hotkey_delayed=hk(self.delayed_edit),
+            hotkey_chat=hk(self.chat_edit),
             delay_seconds=int(self.delay_spin.value()),
             output_root=self.output_edit.text().strip(),
             start_with_windows=self.autostart_check.isChecked(),
@@ -392,6 +400,7 @@ class SettingsWindow(QDialog):
     def _revalidate(self) -> None:
         self._hotkey_note(self.capture_edit, self.capture_note)
         self._hotkey_note(self.delayed_edit, self.delayed_note)
+        self._hotkey_note(self.chat_edit, self.chat_note)
         ok = not self.problems()
         self.ok_button.setEnabled(ok)
         self.apply_button.setEnabled(ok)
@@ -437,7 +446,7 @@ class SettingsWindow(QDialog):
         QTimer.singleShot(0, self._sync_recording)
 
     def _sync_recording(self) -> None:
-        active = self.capture_edit.hasFocus() or self.delayed_edit.hasFocus()
+        active = self.capture_edit.hasFocus() or self.delayed_edit.hasFocus() or self.chat_edit.hasFocus()
         if active != self._recording:
             self._recording = active
             self.hotkey_recording.emit(active)

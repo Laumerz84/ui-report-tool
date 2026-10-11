@@ -22,6 +22,7 @@ from .models import Session
 SETTINGS_SCHEMA_VERSION = 1
 DEFAULT_HOTKEY_CAPTURE = "Ctrl+Alt+S"
 DEFAULT_HOTKEY_DELAYED = "Ctrl+Alt+D"
+DEFAULT_HOTKEY_CHAT = "Ctrl+Alt+Shift+C"
 DEFAULT_DELAY_SECONDS = 3
 MIN_DELAY_SECONDS = 1
 MAX_DELAY_SECONDS = 30
@@ -64,18 +65,26 @@ class Settings:
     start_with_windows: bool = False
     copy_text_template: str = ""  # text copied on Finish; "" = the built-in Claude prompt
     paste_into_claude: bool = True  # on Finish, also paste into the Claude desktop app if it is open
+    hotkey_chat: str = DEFAULT_HOTKEY_CHAT  # "Show Claude": capture straight into the chat window
+    chat_last_folder: str = ""  # project folder the chat window used last
 
     # ---- validation -----------------------------------------------------
     def problems(self) -> list[str]:
         """Human-readable problems with the current values (empty list = all good)."""
         out: list[str] = []
-        for label, value in (("Capture", self.hotkey_capture), ("Delayed capture", self.hotkey_delayed)):
+        named = (("Capture", self.hotkey_capture), ("Delayed capture", self.hotkey_delayed),
+                 ("Show Claude", self.hotkey_chat))
+        for label, value in named:
             err = validate_hotkey(value)
             if err:
                 out.append(f"{label} hotkey: {err}")
         if not out:
-            if normalize_hotkey(self.hotkey_capture) == normalize_hotkey(self.hotkey_delayed):
-                out.append("The capture and delayed-capture hotkeys must be different.")
+            seen: dict[str, str] = {}
+            for label, value in named:
+                key = normalize_hotkey(value)
+                if key in seen:
+                    out.append(f"The {seen[key].lower()} and {label.lower()} hotkeys must be different.")
+                seen.setdefault(key, label)
         if not (MIN_DELAY_SECONDS <= self.delay_seconds <= MAX_DELAY_SECONDS):
             out.append(f"Delay must be between {MIN_DELAY_SECONDS} and {MAX_DELAY_SECONDS} seconds.")
         if not str(self.output_root).strip():
@@ -89,6 +98,7 @@ class Settings:
         for attr, default in (
             ("hotkey_capture", defaults.hotkey_capture),
             ("hotkey_delayed", defaults.hotkey_delayed),
+            ("hotkey_chat", defaults.hotkey_chat),
         ):
             value = getattr(s, attr)
             if validate_hotkey(value) is None:
@@ -109,6 +119,9 @@ class Settings:
         s.start_with_windows = bool(s.start_with_windows)
         s.copy_text_template = str(s.copy_text_template or "")
         s.paste_into_claude = bool(s.paste_into_claude)
+        if s.hotkey_chat in (s.hotkey_capture, s.hotkey_delayed):
+            s.hotkey_chat = defaults.hotkey_chat if defaults.hotkey_chat not in (s.hotkey_capture, s.hotkey_delayed) else ""
+        s.chat_last_folder = str(s.chat_last_folder or "")
         return s
 
     # ---- (de)serialisation ---------------------------------------------

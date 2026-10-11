@@ -13,7 +13,7 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QMessageBox
 
 from .. import __version__
-from ..hotkeyspec import NAME_CAPTURE, NAME_DELAYED
+from ..hotkeyspec import NAME_CAPTURE, NAME_CHAT, NAME_DELAYED
 from ..models import CaptureMode, Session, Shot, SystemMeta
 from ..output.clipboard import copy_prompt_to_clipboard, render_copy_text
 from . import claude_paste
@@ -34,7 +34,7 @@ CHOICE_FINISH = "finish"
 CHOICE_DISCARD = "discard"
 CHOICE_CANCEL = "cancel"
 
-_HOTKEY_LABELS = {NAME_CAPTURE: "capture", NAME_DELAYED: "delayed capture"}
+_HOTKEY_LABELS = {NAME_CAPTURE: "capture", NAME_DELAYED: "delayed capture", NAME_CHAT: "Show Claude"}
 
 
 # ---------------------------------------------------------------------------
@@ -486,7 +486,7 @@ class AppController(QObject):
     # ------------------------------------------------------------------ hotkeys
     def _hotkey_mapping(self) -> dict[str, str]:
         s = self.store.settings
-        return {NAME_CAPTURE: s.hotkey_capture, NAME_DELAYED: s.hotkey_delayed}
+        return {NAME_CAPTURE: s.hotkey_capture, NAME_DELAYED: s.hotkey_delayed, NAME_CHAT: s.hotkey_chat}
 
     def _register_hotkeys(self, report: bool) -> dict[str, str]:
         """(Re-)register both hotkeys; returns {name: reason} for failures. With report=True
@@ -914,6 +914,8 @@ class AppController(QObject):
                     self.store.settings.hotkey_capture = old.hotkey_capture
                 if NAME_DELAYED in failures:
                     self.store.settings.hotkey_delayed = old.hotkey_delayed
+                if NAME_CHAT in failures:
+                    self.store.settings.hotkey_chat = old.hotkey_chat
                 self._register_hotkeys(report=False)
 
         if self.store.settings.start_with_windows != old.start_with_windows:

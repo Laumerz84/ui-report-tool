@@ -11,9 +11,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-# Logical names of the two global hotkeys (HotkeyManager.activated emits one of these).
+# Logical names of the global hotkeys (HotkeyManager.activated emits one of these).
 NAME_CAPTURE = "capture"
 NAME_DELAYED = "delayed"
+NAME_CHAT = "chat"  # "Show Claude": capture straight into the chat window
 
 # Win32 RegisterHotKey modifier flags
 MOD_ALT = 0x0001
