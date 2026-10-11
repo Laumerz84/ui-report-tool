@@ -227,6 +227,8 @@ class AppController(QObject):
         self._editor: Optional[Any] = None
         self._settings_window: Optional[Any] = None
         self._resume_shot_id: Optional[str] = None
+        self._capture_for_chat = False  # the running capture came from the Show Claude hotkey
+        self._chat_window: Optional[Any] = None
         self._pending_mode: Optional[CaptureMode] = None
         self._finishing = False
         self._quit_after_finish = False
@@ -350,6 +352,14 @@ class AppController(QObject):
                 self.hotkeys.stop()
             except Exception:
                 log.exception("stopping the hotkeys failed")
+        chat, self._chat_window = self._chat_window, None
+        if chat is not None:
+            try:
+                chat.shutdown()
+                chat.hide()
+                chat.deleteLater()
+            except Exception:
+                log.exception("closing the chat window failed")
         win, self._settings_window = self._settings_window, None
         if win is not None:
             try:
@@ -525,6 +535,23 @@ class AppController(QObject):
             self.request_capture(CaptureMode.NORMAL)
         elif name == NAME_DELAYED:
             self.request_capture(CaptureMode.DELAYED)
+        elif name == NAME_CHAT:
+            self.request_chat_capture()
+
+    # ------------------------------------------------------------------ Show Claude (chat)
+    def request_chat_capture(self) -> None:
+        """Chat hotkey: today's capture overlay, but the shot goes straight to the chat window."""
+        if self._shut_down or self._capture_busy():
+            return
+        self._capture_for_chat = True
+        self.request_capture(CaptureMode.NORMAL)
+
+    def chat_window(self) -> Any:
+        if self._chat_window is None:
+            from ..chat.window import ChatWindow
+
+            self._chat_window = ChatWindow(self.store, Path(self.store.path).parent / "chat")
+        return self._chat_window
 
     # ------------------------------------------------------------------ capture (F1, F2, F6, F11)
     def _on_tray_capture(self) -> None:
@@ -589,6 +616,15 @@ class AppController(QObject):
         """F3: add to the session, show it in the editor with the caption focused."""
         if self._shut_down:
             return
+        if self._capture_for_chat:
+            self._capture_for_chat = False
+            self._restore_editor()  # a report session in progress comes back as it was
+            try:
+                self.chat_window().send_screenshot(shot.image, shot.window)
+            except Exception as exc:
+                log.exception("could not send the screenshot to the chat")
+                self._toast(f"Could not open the Show Claude chat: {exc}", error=True, timeout_ms=12000)
+            return
         self._resume_shot_id = None
         self._session.add_shot(shot)
         self._sync_tray()
@@ -598,6 +634,7 @@ class AppController(QObject):
         """F4: nothing added; back to the shot that was open (or idle in the tray)."""
         if self._shut_down:
             return
+        self._capture_for_chat = False
         self._restore_editor()
 
     def _on_failed(self, message: str) -> None:
@@ -605,6 +642,7 @@ class AppController(QObject):
         if self._shut_down:
             return
         log.error("capture failed: %s", message)
+        self._capture_for_chat = False
         self._toast(f"Capture failed: {message}", error=True, timeout_ms=10000)
         self._restore_editor()
 
