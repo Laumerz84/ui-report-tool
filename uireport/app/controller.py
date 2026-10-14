@@ -13,6 +13,7 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QMessageBox
 
 from .. import __version__
+from .. import anon
 from ..hotkeyspec import NAME_CAPTURE, NAME_CHAT, NAME_DELAYED
 from ..models import CaptureMode, Session, Shot, SystemMeta
 from ..output.clipboard import copy_prompt_to_clipboard, render_copy_text
@@ -33,6 +34,13 @@ TOAST_OPEN_FOLDER = "Open folder"
 CHOICE_FINISH = "finish"
 CHOICE_DISCARD = "discard"
 CHOICE_CANCEL = "cancel"
+# protected Ekxel data in a shot that isn't anonymized (uireport/anon.py): asked once at Finish / Show Claude
+CHOICE_ANONYMIZED = "anonymized"
+CHOICE_REAL = "real"
+TOAST_ANON_WAIT = "Waiting for Ekxel to anonymize a screenshot... the report is sent as soon as it's done"
+TOAST_ANON_FAILED = ("Ekxel couldn't anonymize screenshot {n}, so nothing was sent. Try again from the banner "
+                     "over the screenshot, or choose to send the real screenshot.")
+TOAST_CHAT_NOT_SENT = "The screenshot wasn't sent (it shows protected Ekxel data)."
 
 _HOTKEY_LABELS = {NAME_CAPTURE: "capture", NAME_DELAYED: "delayed capture", NAME_CHAT: "Show Claude"}
 
@@ -98,6 +106,40 @@ def default_confirm_quit(shot_count: int, parent: Any = None) -> str:
         return CHOICE_FINISH
     if clicked is discard:
         return CHOICE_DISCARD
+    return CHOICE_CANCEL
+
+
+def default_decide_anon(shots: list, parent: Any = None, chat: bool = False) -> str:
+    """Protected Ekxel data that isn't anonymized: Send anonymized (default) / Send real anyway / Cancel."""
+    box = QMessageBox(parent)
+    box.setIcon(QMessageBox.Icon.Warning)
+    box.setWindowTitle("UI Report Tool - protected data")
+    failed = [s for s in shots if s.anon_state == anon.FAILED]
+    if chat:
+        box.setText("This screenshot shows protected data from Ekxel, and Ekxel couldn't anonymize it.")
+    else:
+        nums = ", ".join(str(s.index) for s in shots)
+        noun = f"Screenshot {nums} shows" if len(shots) == 1 else f"Screenshots {nums} show"
+        why = ("Ekxel couldn't anonymize it when it was captured" if failed and len(failed) == len(shots)
+               else "it isn't anonymized" if len(shots) == 1 else "they aren't anonymized")
+        box.setText(f"{noun} protected data from Ekxel, and {why}.")
+    box.setInformativeText(
+        "Send anonymized (recommended): Ekxel draws the same area with stand-ins in place of names, account "
+        "numbers and other personal data.\n"
+        "Send real screenshot anyway: Claude will see the real data.\n\n"
+        "Your captions and notes are sent as you typed them: they are not anonymized.")
+    anon_btn = box.addButton("Send anonymized (recommended)", QMessageBox.ButtonRole.AcceptRole)
+    real_btn = box.addButton("Send real screenshot anyway", QMessageBox.ButtonRole.DestructiveRole)
+    cancel_btn = box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+    box.setDefaultButton(anon_btn)
+    box.setEscapeButton(cancel_btn)
+    box.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+    box.exec()
+    clicked = box.clickedButton()
+    if clicked is anon_btn:
+        return CHOICE_ANONYMIZED
+    if clicked is real_btn:
+        return CHOICE_REAL
     return CHOICE_CANCEL
 
 
@@ -205,6 +247,8 @@ class AppController(QObject):
         prewarm_paste: Optional[Callable[[], None]] = None,
         list_panes: Optional[Callable[[], list]] = None,
         pick_pane: Optional[Callable[[list], Optional[Any]]] = None,
+        anon_jobs: Optional[Any] = None,
+        decide_anon: Optional[Callable[..., str]] = None,
     ) -> None:
         super().__init__(parent)
         self.store = store
@@ -220,6 +264,16 @@ class AppController(QObject):
         # Finish sends to Ekxel's Claude panel instead when Ekxel was used more recently (ekxel_link.py)
         self._ekxel_focus = ekxel_link.FocusTracker(self)
         self._send_to_ekxel_fn = ekxel_link.send_to_ekxel
+        # anonymized screenshots (uireport/anon.py): a capture of protected Ekxel data is swapped for Ekxel's
+        # anonymized picture of the same area right away; Finish / Show Claude ask before real protected data goes out
+        self._anon_jobs = anon_jobs if anon_jobs is not None else ekxel_link.AnonJobs(
+            lambda: self.output_root / ".anon-tmp", self)
+        self._anon_jobs.checked.connect(self._on_anon_checked)
+        self._anon_jobs.done.connect(self._on_anon_done)
+        self._decide_anon_fn = decide_anon
+        self._chat_pending: dict[str, Shot] = {}   # Show Claude shots waiting for Ekxel's anonymized picture
+        self._finish_waiting: Optional[tuple] = None   # Finish pressed while Ekxel was still drawing: (pane,)
+        self._finish_cancelled = False
         self._editor_factory = editor_factory or _default_editor_factory
         self._settings_window_factory = settings_window_factory or _default_settings_window_factory
 
@@ -456,6 +510,9 @@ class AppController(QObject):
             editor.finish_to_requested.connect(self.finish_session_to)
             editor.discard_session_requested.connect(self.discard_session)
             editor.session_changed.connect(self._on_session_changed)
+            retry = getattr(editor, "anon_retry_requested", None)
+            if retry is not None:
+                retry.connect(self.retry_anon)
             self._editor = editor
         return self._editor
 
@@ -589,6 +646,9 @@ class AppController(QObject):
         if self._shut_down or self._capture_busy():
             return
         mode = CaptureMode(mode)
+        if self._finish_waiting is not None:   # a new capture: Finish (waiting for Ekxel) is called off
+            self._finish_waiting = None
+            self._quit_after_finish = False
         self._dismiss_toast()
         self._resume_shot_id = self._current_shot_id()
         if self._editor_visible():
@@ -628,16 +688,153 @@ class AppController(QObject):
             return
         if self._capture_for_chat:
             self._end_chat_capture()
-            try:
-                self.chat_window().send_screenshot(shot.image, shot.window)
-            except Exception as exc:
-                log.exception("could not send the screenshot to the chat")
-                self._toast(f"Could not open the Show Claude chat: {exc}", error=True, timeout_ms=12000)
+            if self._start_anon(shot):
+                self._chat_pending[shot.id] = shot   # sent when Ekxel has answered (_on_anon_done)
+            else:
+                self._deliver_chat(shot)
             return
         self._resume_shot_id = None
         self._session.add_shot(shot)
         self._sync_tray()
         self._present_shot(shot, refresh=True)
+        self._start_anon(shot)
+
+    # ------------------------------------------------------------------ anonymized screenshots (uireport/anon.py)
+    def _start_anon(self, shot: Shot, *, retry: bool = False) -> bool:
+        """Ask Ekxel (on a worker thread) whether the shot's area shows protected data and, if so, for its anonymized
+        picture. False: Ekxel isn't involved (no Ekxel window in the area) - the shot stays as captured."""
+        if shot.capture_rect.is_empty:
+            return False
+        title = shot.anon_info.get("real_title") or (shot.window.title if shot.window else "") or ""
+        try:
+            return bool(self._anon_jobs.start(shot.id, shot.capture_rect, title, skip_check=retry))
+        except Exception:
+            log.exception("could not start the Ekxel anonymization")
+            return False
+
+    def retry_anon(self, shot_id: str) -> None:
+        """The editor's 'Try again' on a shot Ekxel couldn't anonymize."""
+        shot = self._session.get_shot(shot_id)
+        if shot is None or self._anon_jobs.busy(shot_id):
+            return
+        anon.mark_pending(shot)
+        self._editor_anon_changed(shot_id)
+        if not self._start_anon(shot, retry=True):
+            anon.mark_failed(shot)
+            self._editor_anon_changed(shot_id)
+
+    def _editor_anon_changed(self, shot_id: str) -> None:
+        fn = getattr(self._editor, "anon_changed", None) if self._editor is not None else None
+        if fn is not None:
+            try:
+                fn(shot_id)
+            except Exception:
+                log.exception("could not refresh the editor after an anonymization change")
+
+    def _on_anon_checked(self, shot_id: str, protected: bool) -> None:
+        shot = self._chat_pending.get(shot_id) or self._session.get_shot(shot_id)
+        if shot is not None and protected:
+            anon.mark_pending(shot)
+            self._editor_anon_changed(shot_id)
+
+    def _on_anon_done(self, shot_id: str, result: Any) -> None:
+        self._anon_jobs.finished(shot_id)
+        chat = self._chat_pending.pop(shot_id, None)
+        shot = chat or self._session.get_shot(shot_id)
+        if shot is None:   # deleted or discarded meanwhile
+            self._finish_if_waiting()
+            return
+        if getattr(result, "protected", False):
+            ok = bool(getattr(result, "ok", False)) and anon.apply_render(
+                shot, result.image, getattr(result, "token", ""), getattr(result, "title", None))
+            if not ok:
+                log.warning("Ekxel couldn't anonymize shot %s: %s", shot_id, getattr(result, "error", ""))
+                anon.mark_failed(shot)
+        elif shot.anon_state == anon.PENDING:
+            shot.anon_state = ""
+        if chat is not None:
+            self._finish_chat_shot(chat)
+        else:
+            self._editor_anon_changed(shot_id)
+        self._finish_if_waiting()
+
+    def _finish_if_waiting(self) -> None:
+        """Finish was pressed while Ekxel was still drawing: go on once every shot has its answer."""
+        if self._finish_waiting is not None and not self._anon_jobs.busy():
+            (pane,), self._finish_waiting = self._finish_waiting, None
+            self._dismiss_toast()
+            self.finish_session(pane=pane)
+
+    def _decide_anon(self, shots: list, chat: bool = False) -> str:
+        if self._decide_anon_fn is not None:
+            return self._decide_anon_fn(shots, chat=chat)
+        return default_decide_anon(shots, self._editor_widget_parent(), chat=chat)
+
+    def _render_now(self, shot: Shot) -> Any:
+        """Ekxel's anonymized picture, synchronously (Finish's 'Send anonymized' for a shot it couldn't do before)."""
+        from PySide6.QtGui import QGuiApplication
+
+        title = shot.anon_info.get("real_title") or (shot.window.title if shot.window else "") or ""
+        QGuiApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            return self._anon_jobs.render(shot.capture_rect, title, self.output_root / ".anon-tmp")
+        except Exception as exc:
+            log.exception("Ekxel render failed")
+            return ekxel_link.AnonResult(protected=True, error=str(exc))
+        finally:
+            QGuiApplication.restoreOverrideCursor()
+
+    def _make_anonymized(self, shot: Shot) -> bool:
+        if anon.use_anonymized(shot):
+            return True
+        res = self._render_now(shot)
+        if getattr(res, "ok", False) and anon.apply_render(shot, res.image, res.token, res.title):
+            return True
+        anon.mark_failed(shot)
+        return False
+
+    def _resolve_protected(self, session: Session) -> bool:
+        """Before anything is written or sent: shots showing protected Ekxel data that aren't anonymized (the user
+        chose the real one, or Ekxel couldn't draw it) are asked about once. False = stop (the session stays)."""
+        need = [s for s in session.shots if anon.needs_decision(s)]
+        if not need:
+            return True
+        choice = self._decide_anon(need)
+        if choice == CHOICE_REAL:
+            return True
+        if choice != CHOICE_ANONYMIZED:
+            return False
+        for s in need:
+            ok = self._make_anonymized(s)
+            self._editor_anon_changed(s.id)
+            if not ok:
+                self._toast(TOAST_ANON_FAILED.format(n=s.index or session.index_of(s.id) + 1),
+                            error=True, timeout_ms=15000)
+                return False
+        return True
+
+    def _finish_chat_shot(self, shot: Shot) -> None:
+        """A Show Claude shot after Ekxel answered: anonymized / not protected -> send; not anonymized -> ask."""
+        if anon.needs_decision(shot):
+            choice = self._decide_anon([shot], chat=True)
+            if choice == CHOICE_ANONYMIZED:
+                if self._make_anonymized(shot):
+                    self._deliver_chat(shot)
+                else:
+                    self._toast(TOAST_CHAT_NOT_SENT + " Ekxel still couldn't anonymize it.", error=True,
+                                timeout_ms=12000)
+                return
+            if choice != CHOICE_REAL:
+                self._toast(TOAST_CHAT_NOT_SENT, timeout_ms=8000)
+                return
+        self._deliver_chat(shot)
+
+    def _deliver_chat(self, shot: Shot) -> None:
+        try:
+            self.chat_window().send_screenshot(shot.image, shot.window)
+        except Exception as exc:
+            log.exception("could not send the screenshot to the chat")
+            self._toast(f"Could not open the Show Claude chat: {exc}", error=True, timeout_ms=12000)
 
     def _on_cancelled(self, _mode: str = "") -> None:
         """F4: nothing added; back to the shot that was open (or idle in the tray)."""
@@ -682,12 +879,15 @@ class AppController(QObject):
         """Drop the session (the caller has already confirmed) and start a fresh one."""
         if self._finishing:
             return
+        if self._finish_waiting is not None:
+            self._quit_after_finish = False
         self._start_fresh_session()
         self._hide_editor()
 
     def _start_fresh_session(self) -> None:
         self._session = self.store.settings.new_session()
         self._resume_shot_id = None
+        self._finish_waiting = None
         if self._editor is not None:
             try:
                 self._editor.set_session(self._session)
@@ -749,6 +949,15 @@ class AppController(QObject):
             return
         session = self._session
         if not session.shots:
+            return
+        self._finish_cancelled = False
+        if any(self._anon_jobs.busy(s.id) or anon.is_pending(s) for s in session.shots):
+            self._finish_waiting = (pane,)   # Ekxel is still drawing an anonymized screenshot: finish right after
+            self._toast(TOAST_ANON_WAIT, timeout_ms=0)
+            return
+        self._finish_waiting = None
+        if not self._resolve_protected(session):
+            self._finish_cancelled = True    # the user cancelled (or Ekxel couldn't anonymize): nothing is sent
             return
         self._finishing = True
         self._paste_pane = pane if isinstance(pane, claude_paste.Pane) else None
@@ -1010,8 +1219,12 @@ class AppController(QObject):
             if choice == CHOICE_FINISH:
                 self._quit_after_finish = True
                 self.finish_session()
-                if not self._finishing:  # nothing was started (cannot normally happen)
+                if self._finish_waiting is not None:   # waiting for Ekxel's anonymized picture: quits after it
+                    return
+                if not self._finishing:  # nothing was started
                     self._quit_after_finish = False
+                    if self._finish_cancelled:   # cancelled at the protected-data question: keep running
+                        return
                     self._do_quit()
                 return
         self._do_quit()

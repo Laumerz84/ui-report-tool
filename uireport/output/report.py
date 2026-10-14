@@ -193,6 +193,9 @@ def _shot_lines(shot: Shot, position: int, total: int, folder: Path) -> list[str
     out.append(f"- **Caption:** {_bullet_text(shot.caption) if shot.caption.strip() else NO_CAPTION}")
     out.append(f"- **Annotated image:** {win_path(annotated)}")
     out.append(f"- **Original image:** {win_path(original)}")
+    anon = shot.extra.get("anonymized")
+    if isinstance(anon, dict):   # uireport/anon.py: both images are Ekxel's anonymized picture of the area
+        out.append(f"- **Anonymized:** {anon.get('note') or 'Anonymized by Ekxel: stand-ins replace personal data'}")
     out.append(f"- **Captured:** {_capture_line(shot)}")
     mon = _monitor_shot_line(shot)
     if mon:

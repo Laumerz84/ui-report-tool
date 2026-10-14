@@ -490,6 +490,12 @@ class Shot:
     extra: dict[str, Any] = field(default_factory=dict)  # unknown keys preserved across load/save
     # Runtime only, never serialised: the ORIGINAL QImage (unannotated, unredacted).
     image: Any = field(default=None, repr=False, compare=False)
+    # Runtime only, never serialised: Ekxel's anonymized screenshots (uireport/anon.py). `image` is one of these two;
+    # the real capture lives only here, in memory, and is never written to disk.
+    anon_state: str = field(default="", repr=False, compare=False)
+    real_image: Any = field(default=None, repr=False, compare=False)
+    anon_image: Any = field(default=None, repr=False, compare=False)
+    anon_info: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     # ---- image ----------------------------------------------------------
     def set_image(self, image: Any) -> None:

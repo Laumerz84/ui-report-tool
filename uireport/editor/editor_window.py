@@ -8,6 +8,7 @@ from PySide6.QtGui import QGuiApplication, QKeySequence, QShortcut, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -22,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import APP_NAME
+from .. import anon
 from ..models import Role, Session, ROLE_ORDER, MonitorMeta
 from . import placement
 from .canvas import TOOL_KEYS, TOOL_LABELS, TOOL_TIPS, AnnotationCanvas, Tool
@@ -72,6 +74,7 @@ class EditorWindow(QMainWindow):
     finish_to_requested = Signal()
     discard_session_requested = Signal()
     session_changed = Signal()
+    anon_retry_requested = Signal(str)   # shot id: ask Ekxel again for its anonymized picture (uireport/anon.py)
 
     def __init__(self, session: Session, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -79,6 +82,8 @@ class EditorWindow(QMainWindow):
         self._current_id: Optional[str] = None
         self._loading = False
         self._placed = False
+        # "Use real screenshot" asks first; replaceable (callable(shot) -> bool) for scripted runs
+        self.confirm_real = self._confirm_real
         self.setWindowTitle(APP_NAME)
         self.setAttribute(Qt.WidgetAttribute.WA_QuitOnClose, False)  # hiding this window never quits the tray app
         self._build_ui()
@@ -133,6 +138,22 @@ class EditorWindow(QMainWindow):
         bar.addWidget(self.zoom_label)
         bar.addStretch(1)
         root.addWidget(self.tool_bar)
+
+        # ---- Ekxel anonymized screenshot banner (uireport/anon.py) -----
+        self.anon_banner = QFrame(self)
+        self.anon_banner.setObjectName("AnonBanner")
+        ab = QHBoxLayout(self.anon_banner)
+        ab.setContentsMargins(8, 4, 6, 4)
+        ab.setSpacing(8)
+        self.anon_label = QLabel("", self.anon_banner)
+        self.anon_label.setWordWrap(True)
+        ab.addWidget(self.anon_label, 1)
+        self.anon_button = QPushButton("", self.anon_banner)
+        self.anon_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.anon_button.clicked.connect(self._on_anon_button)
+        ab.addWidget(self.anon_button)
+        self.anon_banner.hide()
+        root.addWidget(self.anon_banner)
 
         # ---- canvas + marks -------------------------------------------
         marks_box = QWidget(self)
@@ -326,10 +347,88 @@ class EditorWindow(QMainWindow):
             self._loading = False
         self.panel.set_current(shot_id)
         self._update_state()
+        self._update_anon_banner()
         self._focus_caption()
 
     def current_shot_id(self) -> Optional[str]:
         return self._current_id
+
+    def anon_changed(self, shot_id: str) -> None:
+        """The shot's image was swapped (Ekxel's anonymized picture <-> the real capture) or its anonymization state
+        changed: repaint it (annotations stay: both pictures have the same size) and update the banner."""
+        shot = self._session.get_shot(shot_id)
+        if shot is None:
+            return
+        self.panel.invalidate(shot_id)
+        if shot_id == self._current_id:
+            self.canvas.update()
+            self.marks.refresh()
+            self._update_anon_banner()
+            self._sync_view_controls()
+
+    # ---- Ekxel anonymized screenshots (uireport/anon.py) ------------------
+    _BANNER_STYLES = {
+        "anonymized": "#AnonBanner { background: #E8F4EA; border: 1px solid #9CC9A5; border-radius: 3px; }"
+                      " QLabel { color: #1E5B2C; }",
+        "pending": "#AnonBanner { background: #EEF3FA; border: 1px solid #A9C1E0; border-radius: 3px; }"
+                   " QLabel { color: #23446E; }",
+        "real": "#AnonBanner { background: #FFF4E0; border: 1px solid #E5B567; border-radius: 3px; }"
+                " QLabel { color: #7A4A00; }",
+        "failed": "#AnonBanner { background: #FDECEA; border: 1px solid #E3A29B; border-radius: 3px; }"
+                  " QLabel { color: #8A1F14; }",
+    }
+
+    def _update_anon_banner(self) -> None:
+        shot = self._current_shot()
+        text, kind = anon.banner(shot)
+        if not kind:
+            self.anon_banner.hide()
+            return
+        self.anon_label.setText(text)
+        self.anon_banner.setStyleSheet(self._BANNER_STYLES.get(kind, ""))
+        button = {"anonymized": "Use real screenshot...", "failed": "Try again",
+                  "real": "Use anonymized" if shot is not None and shot.anon_image is not None else ""}.get(kind, "")
+        self.anon_button.setText(button)
+        self.anon_button.setVisible(bool(button))
+        tips = {"anonymized": "Send the real screenshot instead: Claude will see the real data (asks first)",
+                "real": "Send Ekxel's anonymized picture instead (stand-ins replace personal data)",
+                "failed": "Ask Ekxel again to draw this area with stand-ins for the personal data"}
+        self.anon_button.setToolTip(tips.get(kind, ""))
+        self.anon_banner.show()
+
+    def _confirm_real(self, shot) -> bool:
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Use the real screenshot?")
+        box.setText("Claude will see the real data in this screenshot.")
+        box.setInformativeText("The names, account numbers and other personal data that Ekxel replaced with "
+                               "stand-ins are sent as they are. You'll be asked once more when you press Finish.")
+        real = box.addButton("Use real screenshot", QMessageBox.ButtonRole.DestructiveRole)
+        cancel = box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(cancel)
+        box.setEscapeButton(cancel)
+        box.exec()
+        return box.clickedButton() is real
+
+    def _on_anon_button(self) -> None:
+        shot = self._current_shot()
+        if shot is None:
+            return
+        state = shot.anon_state
+        if state == anon.ANONYMIZED:
+            if not self.confirm_real(shot):
+                return
+            anon.use_real(shot)
+        elif state == anon.REAL:
+            anon.use_anonymized(shot)
+        elif state == anon.FAILED:
+            self.anon_retry_requested.emit(shot.id)
+            return
+        else:
+            return
+        self.anon_changed(shot.id)
+        self.panel.update_shot(shot.id)
+        self.session_changed.emit()
 
     def present(self, monitor_hint: Optional[MonitorMeta] = None) -> None:
         """Show, restore from minimised, raise and activate the window (use a foreground
@@ -426,6 +525,7 @@ class EditorWindow(QMainWindow):
         self._set_enabled(False)
         self.panel.set_current(None)
         self._update_state()
+        self.anon_banner.hide()
 
     def _update_state(self) -> None:
         shots = self._session.shots

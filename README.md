@@ -119,6 +119,29 @@ the same conversation. Text you type *before* pressing the hotkey goes along wit
 
 It needs Claude Code installed and signed in (`claude` in a terminal once). No API key.
 
+## Screenshots of Ekxel: anonymized
+
+If a capture shows an **Ekxel** window whose data is protected (Ekxel's Protect Data, on by default), the tool asks the
+running Ekxel for the same screen area drawn the way Claude may see it: names, account numbers and other personal data
+replaced by stand-ins, and anything Ekxel can't draw that way (other programs, Ekxel's Claude panel, pictures, dialogs)
+greyed out as "hidden". That picture **replaces** the screenshot right after the capture, for reports, Finish, *Finish
+to...* and Show Claude alike. The talk with Ekxel is local (its single-instance socket, no network).
+
+- A banner over the shot says what you have: *Anonymized by Ekxel* (with **Use real screenshot...**, which asks first),
+  *Real screenshot* (with **Use anonymized**), or *Not anonymized: Ekxel couldn't render it* (with **Try again**).
+- The real capture stays **in memory only**: it is never saved to the report folder unless you choose it.
+- **Finish** and Show Claude wait until Ekxel has answered, then ask once about any shot of protected data that isn't
+  anonymized: *Send anonymized (recommended)*, *Send real screenshot anyway* or *Cancel* (nothing is saved or sent).
+- report.md marks such shots "Anonymized by Ekxel"; the window title in the report is the masked one.
+- **Your captions, pin notes and goal are sent as you type them** - they are not anonymized. Don't type client data
+  there. (Reports handed to Ekxel's own Claude panel are masked by Ekxel like any message.)
+- Limits: the title bar in the picture is an approximation; display scaling other than 100 % hasn't been tested;
+  *Try again* draws the area as it is now, not as it was captured.
+
+When Ekxel isn't running, or the area shows no Ekxel window, screenshots work as before. Ekxel's side is
+`sheets/anon_shot.py` in its repository (details in its `docs/protect-data.md`, section 11.1); here it is
+`uireport/anon.py` and `uireport/app/ekxel_link.py`.
+
 ## The paste prompt
 
 On **Finish** the tool copies a short prompt to the clipboard and shows a *"Copied — paste into
