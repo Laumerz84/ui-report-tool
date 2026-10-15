@@ -23,6 +23,16 @@ SETTINGS_SCHEMA_VERSION = 1
 DEFAULT_HOTKEY_CAPTURE = "Ctrl+Alt+S"
 DEFAULT_HOTKEY_DELAYED = "Ctrl+Alt+D"
 DEFAULT_HOTKEY_CHAT = "Ctrl+Alt+Shift+C"
+# What an extra hotkey does after the capture (Settings > More hotkeys)
+HOTKEY_ACTIONS = {
+    "copy": "Copy to clipboard",
+    "save": "Save to folder",
+    "copy_save": "Copy + save",
+    "report": "Add to report",
+    "chat": "Show Claude",
+}
+DEFAULT_SAVE_NAME = "Screenshot {date} {time}"
+SAVE_FORMATS = ("png", "jpg")
 DEFAULT_DELAY_SECONDS = 3
 MIN_DELAY_SECONDS = 1
 MAX_DELAY_SECONDS = 30
@@ -67,17 +77,28 @@ class Settings:
     paste_into_claude: bool = True  # on Finish, also paste into the Claude desktop app if it is open
     hotkey_chat: str = DEFAULT_HOTKEY_CHAT  # "Show Claude": capture straight into the chat window
     chat_last_folder: str = ""  # project folder the chat window used last
+    # extra hotkeys: [{"hotkey": "Ctrl+Alt+X", "action": "copy", "delayed": False}, ...]
+    custom_hotkeys: list = field(default_factory=list)
+    save_folder: str = ""  # "" = <output_root's parent>\Screenshots
+    save_format: str = "png"
+    save_name: str = DEFAULT_SAVE_NAME  # fill-ins {date} {time} {n}
 
     # ---- validation -----------------------------------------------------
     def problems(self) -> list[str]:
         """Human-readable problems with the current values (empty list = all good)."""
         out: list[str] = []
-        named = (("Capture", self.hotkey_capture), ("Delayed capture", self.hotkey_delayed),
-                 ("Show Claude", self.hotkey_chat))
+        named = [("Capture", self.hotkey_capture), ("Delayed capture", self.hotkey_delayed),
+                 ("Show Claude", self.hotkey_chat)]
         for label, value in named:
             err = validate_hotkey(value)
             if err:
                 out.append(f"{label} hotkey: {err}")
+        for i, row in enumerate(self.custom_hotkeys, start=1):
+            err = validate_hotkey(row.get("hotkey", ""))
+            if err:
+                out.append(f"Extra hotkey {i}: {err}")
+            else:
+                named.append((f"Extra hotkey {i}", row["hotkey"]))
         if not out:
             seen: dict[str, str] = {}
             for label, value in named:
@@ -89,6 +110,8 @@ class Settings:
             out.append(f"Delay must be between {MIN_DELAY_SECONDS} and {MAX_DELAY_SECONDS} seconds.")
         if not str(self.output_root).strip():
             out.append("Output folder must not be empty.")
+        if not str(self.save_name).strip():
+            out.append("The file name for saved screenshots must not be empty.")
         return out
 
     def sanitized(self) -> "Settings":
@@ -122,6 +145,20 @@ class Settings:
         if s.hotkey_chat in (s.hotkey_capture, s.hotkey_delayed):
             s.hotkey_chat = defaults.hotkey_chat if defaults.hotkey_chat not in (s.hotkey_capture, s.hotkey_delayed) else ""
         s.chat_last_folder = str(s.chat_last_folder or "")
+        rows, taken = [], {s.hotkey_capture, s.hotkey_delayed, s.hotkey_chat}
+        for row in s.custom_hotkeys if isinstance(s.custom_hotkeys, list) else []:
+            if not isinstance(row, dict) or validate_hotkey(str(row.get("hotkey", ""))) is not None:
+                continue
+            key = normalize_hotkey(str(row["hotkey"]))
+            if key in taken:
+                continue
+            taken.add(key)
+            action = row.get("action") if row.get("action") in HOTKEY_ACTIONS else "copy"
+            rows.append({"hotkey": key, "action": action, "delayed": bool(row.get("delayed", False))})
+        s.custom_hotkeys = rows
+        s.save_folder = str(s.save_folder or "")
+        s.save_format = s.save_format if s.save_format in SAVE_FORMATS else "png"
+        s.save_name = str(s.save_name or "").strip() or DEFAULT_SAVE_NAME
         return s
 
     # ---- (de)serialisation ---------------------------------------------
@@ -148,6 +185,8 @@ class Settings:
                 kwargs[f.name] = value if isinstance(value, int) and not isinstance(value, bool) else default
             elif isinstance(default, str):
                 kwargs[f.name] = value if isinstance(value, str) else default
+            elif isinstance(default, list):
+                kwargs[f.name] = value if isinstance(value, list) else default
         return cls(**{**{f.name: getattr(base, f.name) for f in fields(cls)}, **kwargs}).sanitized()
 
     # ---- session glue ---------------------------------------------------

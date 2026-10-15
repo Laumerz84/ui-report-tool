@@ -271,6 +271,9 @@ class AppController(QObject):
         self._anon_jobs.checked.connect(self._on_anon_checked)
         self._anon_jobs.done.connect(self._on_anon_done)
         self._decide_anon_fn = decide_anon
+        self._custom_registered = 0  # how many extra hotkeys are bound (so removed rows get unbound)
+        self._side_action = "chat"  # what a side capture (chat hotkey or an extra hotkey) does with its shot
+        self._side_actions: dict[str, str] = {}  # shot id -> action, until it is delivered
         self._chat_pending: dict[str, Shot] = {}   # Show Claude shots waiting for Ekxel's anonymized picture
         self._finish_waiting: Optional[tuple] = None   # Finish pressed while Ekxel was still drawing: (pane,)
         self._finish_cancelled = False
@@ -513,6 +516,11 @@ class AppController(QObject):
             retry = getattr(editor, "anon_retry_requested", None)
             if retry is not None:
                 retry.connect(self.retry_anon)
+            for sig, slot in (("copy_requested", self.copy_shot), ("save_requested", self.save_shot_as)):
+                if getattr(editor, sig, None) is not None:
+                    getattr(editor, sig).connect(slot)
+            if hasattr(editor, "set_drag_provider"):
+                editor.set_drag_provider(self.drag_file_for)
             self._editor = editor
         return self._editor
 
@@ -554,7 +562,10 @@ class AppController(QObject):
     # ------------------------------------------------------------------ hotkeys
     def _hotkey_mapping(self) -> dict[str, str]:
         s = self.store.settings
-        return {NAME_CAPTURE: s.hotkey_capture, NAME_DELAYED: s.hotkey_delayed, NAME_CHAT: s.hotkey_chat}
+        mapping = {NAME_CAPTURE: s.hotkey_capture, NAME_DELAYED: s.hotkey_delayed, NAME_CHAT: s.hotkey_chat}
+        for i in range(max(len(s.custom_hotkeys), self._custom_registered)):
+            mapping[f"custom{i}"] = s.custom_hotkeys[i]["hotkey"] if i < len(s.custom_hotkeys) else ""  # "" unbinds
+        return mapping
 
     def _register_hotkeys(self, report: bool) -> dict[str, str]:
         """(Re-)register both hotkeys; returns {name: reason} for failures. With report=True
@@ -564,6 +575,7 @@ class AppController(QObject):
         mapping = self._hotkey_mapping()
         try:
             results = self.hotkeys.set_hotkeys(mapping) or {}
+            self._custom_registered = len(self.store.settings.custom_hotkeys)
         except Exception as exc:
             log.exception("registering the hotkeys failed")
             results = {name: str(exc) for name in mapping}
@@ -575,7 +587,8 @@ class AppController(QObject):
 
     def _hotkey_failure_text(self, name: str, reason: str) -> str:
         combo = self._hotkey_mapping().get(name, name)
-        return f"{combo} could not be registered as the {_HOTKEY_LABELS.get(name, name)} hotkey ({reason})"
+        label = "extra" if name.startswith("custom") else _HOTKEY_LABELS.get(name, name)
+        return f"{combo} could not be registered as the {label} hotkey ({reason})"
 
     def _report_hotkey_failure(self, name: str, reason: str) -> None:
         text = self._hotkey_failure_text(name, reason)
@@ -595,15 +608,29 @@ class AppController(QObject):
             self.request_capture(CaptureMode.DELAYED)
         elif name == NAME_CHAT:
             self.request_chat_capture()
+        elif name.startswith("custom"):
+            rows = self.store.settings.custom_hotkeys
+            i = int(name[len("custom"):] or -1)
+            if 0 <= i < len(rows):
+                self.request_side_capture(rows[i]["action"], bool(rows[i].get("delayed")))
 
     # ------------------------------------------------------------------ Show Claude (chat)
     def request_chat_capture(self) -> None:
         """Chat hotkey: today's capture overlay, but the shot goes straight to the chat window."""
+        self.request_side_capture("chat")
+
+    def request_side_capture(self, action: str, delayed: bool = False) -> None:
+        """A capture that skips the report: 'chat' (Show Claude), 'copy', 'save' or 'copy_save'
+        (extra hotkeys). 'report' is the normal capture."""
+        if action == "report":
+            self.request_capture(CaptureMode.DELAYED if delayed else CaptureMode.NORMAL)
+            return
         if self._shut_down or self._capture_busy():
             return
         self._capture_for_chat = True
+        self._side_action = action
         self._chat_editor_was_open = self._editor_visible()
-        self.request_capture(CaptureMode.NORMAL)
+        self.request_capture(CaptureMode.DELAYED if delayed else CaptureMode.NORMAL)
 
     def _end_chat_capture(self) -> None:
         """After a chat capture (sent, cancelled or failed): the report editor comes back only if it was open."""
@@ -687,6 +714,7 @@ class AppController(QObject):
         if self._shut_down:
             return
         if self._capture_for_chat:
+            self._side_actions[shot.id] = self._side_action
             self._end_chat_capture()
             if self._start_anon(shot):
                 self._chat_pending[shot.id] = shot   # sent when Ekxel has answered (_on_anon_done)
@@ -830,11 +858,102 @@ class AppController(QObject):
         self._deliver_chat(shot)
 
     def _deliver_chat(self, shot: Shot) -> None:
+        action = self._side_actions.pop(shot.id, "chat")
+        if action != "chat":
+            self._export_quick(shot, action)
+            return
         try:
             self.chat_window().send_screenshot(shot.image, shot.window)
         except Exception as exc:
             log.exception("could not send the screenshot to the chat")
             self._toast(f"Could not open the Show Claude chat: {exc}", error=True, timeout_ms=12000)
+
+    def _export_quick(self, shot: Shot, action: str) -> None:
+        """Extra-hotkey actions: copy the capture, save it, or both. No editor."""
+        from ..output import export
+
+        done = []
+        saved = None
+        try:
+            if action in ("copy", "copy_save"):
+                export.copy_image(shot.image)
+                done.append("Copied to the clipboard")
+            if action in ("save", "copy_save"):
+                saved = export.save_image(shot.image, self.store.settings, self.output_root)
+                done.append(f"Saved {saved.name}")
+        except Exception as exc:
+            log.exception("quick %s failed", action)
+            self._toast(f"Could not {action.replace('_', ' and ')} the screenshot: {exc}", error=True, timeout_ms=12000)
+            return
+        if saved is not None:
+            folder = saved.parent
+            self._toast(" \u00b7 ".join(done), action_text="Open folder",
+                        action=lambda: self._open_path(folder), timeout_ms=6000)
+        else:
+            self._toast(done[0], timeout_ms=3000)
+
+    # ------------------------------------------------------------------ editor: copy / save as / drag
+    def _editor_render(self, shot_id: str) -> Any:
+        from ..output.render import render_annotated
+
+        shot = self._session.get_shot(shot_id)
+        if shot is None or shot.image is None:
+            return None, None
+        return shot, render_annotated(shot)
+
+    def copy_shot(self, shot_id: str) -> None:
+        from ..output import export
+
+        _shot, image = self._editor_render(shot_id)
+        if image is None:
+            return
+        try:
+            export.copy_image(image)
+            self._toast("Copied to the clipboard (with your markup)", timeout_ms=3000)
+        except Exception as exc:
+            log.exception("copy failed")
+            self._toast(f"Could not copy the screenshot: {exc}", error=True, timeout_ms=10000)
+
+    def save_shot_as(self, shot_id: str) -> None:
+        from PySide6.QtWidgets import QFileDialog
+
+        from ..output import export
+
+        _shot, image = self._editor_render(shot_id)
+        if image is None:
+            return
+        s = self.store.settings
+        folder = export.save_dir(s, self.output_root)
+        start = export.unique_path(folder, export.file_stem(s.save_name), s.save_format)
+        png, jpg = "PNG image (*.png)", "JPG image (*.jpg)"
+        path, _ = QFileDialog.getSaveFileName(self._editor_widget_parent(), "Save screenshot", str(start),
+                                              f"{png};;{jpg}", jpg if s.save_format == "jpg" else png)
+        if not path:
+            return
+        if Path(path).suffix.lower() not in (".png", ".jpg", ".jpeg"):
+            path += "." + s.save_format
+        try:
+            written = export.write_image(image, Path(path))
+        except Exception as exc:
+            log.exception("save as failed")
+            self._toast(f"Could not save the screenshot: {exc}", error=True, timeout_ms=10000)
+            return
+        self._toast(f"Saved {written.name}", action_text="Open folder",
+                    action=lambda: self._open_path(written.parent), timeout_ms=6000)
+
+    def drag_file_for(self, shot_id: str) -> Optional[str]:
+        """A PNG of the shot with its markup, for dragging into another app (None if it can't be made)."""
+        from ..output import export
+
+        shot, image = self._editor_render(shot_id)
+        if image is None:
+            return None
+        try:
+            stem = export.file_stem(self.store.settings.save_name) + f" {shot.index:02d}"
+            return str(export.drag_file(image, self.output_root, stem))
+        except Exception:
+            log.exception("could not prepare the drag file")
+            return None
 
     def _on_cancelled(self, _mode: str = "") -> None:
         """F4: nothing added; back to the shot that was open (or idle in the tray)."""
@@ -1176,6 +1295,8 @@ class AppController(QObject):
                     self.store.settings.hotkey_delayed = old.hotkey_delayed
                 if NAME_CHAT in failures:
                     self.store.settings.hotkey_chat = old.hotkey_chat
+                if any(n.startswith("custom") for n in failures):
+                    self.store.settings.custom_hotkeys = list(old.custom_hotkeys)
                 self._register_hotkeys(report=False)
 
         if self.store.settings.start_with_windows != old.start_with_windows:

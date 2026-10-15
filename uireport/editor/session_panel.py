@@ -46,6 +46,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..annotdraw import AnnotStyle, draw_annotations
+from .dragout import add_file
 from ..models import CaptureMode, Session, Shot
 
 ID_ROLE = Qt.ItemDataRole.UserRole
@@ -275,12 +276,17 @@ class _FilmList(QListWidget):
         drag = QDrag(self)
         mime = QMimeData()
         mime.setData(MIME_TYPE, str(self.item_id(item)).encode("ascii"))
+        provider = getattr(self, "drag_provider", None)
+        path = provider(str(self.item_id(item))) if provider else None
+        if path:  # dropping outside the strip gives other apps the screenshot with its markup
+            add_file(mime, path)
         drag.setMimeData(mime)
         pm = self.viewport().grab(rect)
         drag.setPixmap(pm)
         drag.setHotSpot(self.viewport().mapFromGlobal(QCursor.pos()) - rect.topLeft())
         try:
-            drag.exec(Qt.DropAction.MoveAction)  # the outcome is applied by dropEvent; ignore the result
+            # Move reorders inside the strip (dropEvent); Copy lets other apps take the file
+            drag.exec(Qt.DropAction.CopyAction | Qt.DropAction.MoveAction, Qt.DropAction.MoveAction)
         finally:
             self._drag_row = -1
             self._drop_x = None
@@ -374,6 +380,10 @@ class SessionPanel(QWidget):
     shot_delete_requested = Signal(str)
     order_changed = Signal(list)
 
+    def set_drag_provider(self, provider) -> None:
+        """provider(shot id) -> PNG path; thumbnails dragged out of the strip carry that file."""
+        self._list.drag_provider = provider
+
     def __init__(self, session: Session, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._session = session
@@ -382,6 +392,7 @@ class SessionPanel(QWidget):
         self._base_cache: dict[str, tuple[tuple, QImage]] = {}
         self._thumb_cache: dict[str, tuple[tuple, QPixmap]] = {}
         self._list = _FilmList(self)
+        self._list.drag_provider = None
         self._delegate = _ThumbDelegate(self)
         self._list.setItemDelegate(self._delegate)
         lay = QVBoxLayout(self)

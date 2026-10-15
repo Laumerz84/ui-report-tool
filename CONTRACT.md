@@ -377,3 +377,20 @@ an optional addition or a clarification of behaviour.
   cwd in the file). `own_sessions.json` in the chat folder lists this window's session ids.
 * `uireport/chat/folder_guess.py`: candidates = sibling `codebase-dashboard\recent.json` + session cwds (scratch/temp/AppData
   dropped); match the window's exe path, command-line paths, or a folder name in its title; else the last folder, else home.
+
+## 13. Capture anywhere (added 2026-10-14; spec: docs/superpowers/specs/2026-10-14-capture-anywhere-design.md)
+
+* Settings: `custom_hotkeys` = list of `{"hotkey", "action", "delayed"}` with action in `settings.HOTKEY_ACTIONS`
+  (copy / save / copy_save / report / chat); `save_folder` ("" = `<output_root parent>\Screenshots`), `save_format`
+  (png / jpg), `save_name` (`{date}` `{time}` `{n}`). sanitized() drops invalid or clashing rows; problems() reports clashes
+  across all hotkeys. Hotkey names `custom0..N`; removed rows are unbound with "" on the next registration.
+* `AppController.request_side_capture(action, delayed)`: report = the normal capture; anything else reuses the Show Claude
+  side-capture path (`_capture_for_chat`, editor restored only if it was open, anonymization via `_start_anon`), then
+  `_deliver_chat` routes by `_side_actions[shot.id]`: chat -> chat window, copy/save -> `_export_quick` (no editor).
+* `uireport/output/export.py`: `copy_image`, `save_image` / `write_image` (never overwrites: " (2)"...), `save_dir`,
+  `file_stem`, `drag_file` (`<output_root>\.drag`, files older than a day pruned).
+* Editor: `copy_requested(shot_id)` / `save_requested(shot_id)` (Ctrl+Shift+C / Ctrl+S; Ctrl+C stays with the caption box),
+  `set_drag_provider(fn)` for the Drag handle and the filmstrip (drag = file URL + image data; Move inside the strip still
+  reorders). The controller renders with `render_annotated`, so copies and files include the markup. The editor package
+  still imports nothing from output/app.
+

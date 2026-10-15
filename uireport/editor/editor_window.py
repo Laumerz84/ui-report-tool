@@ -5,6 +5,7 @@ from typing import Optional
 
 from PySide6.QtCore import QEventLoop, Qt, QTimer, Signal
 from PySide6.QtGui import QGuiApplication, QKeySequence, QShortcut, QTextCursor
+
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -31,6 +32,7 @@ from .marks_list import MarksList
 from .session_fields import SessionFieldsWidget
 from .session_panel import SessionPanel
 from .widgets import EnterShortcutFilter, RoleSegmented
+from .dragout import DragHandle
 
 _RETURN_KEYS = ("Return", "Enter")  # main Return and keypad Enter
 
@@ -74,6 +76,8 @@ class EditorWindow(QMainWindow):
     finish_to_requested = Signal()
     discard_session_requested = Signal()
     session_changed = Signal()
+    copy_requested = Signal(str)   # shot id: copy it (with markup) to the clipboard
+    save_requested = Signal(str)   # shot id: Save as...
     anon_retry_requested = Signal(str)   # shot id: ask Ekxel again for its anonymized picture (uireport/anon.py)
 
     def __init__(self, session: Session, parent: Optional[QWidget] = None) -> None:
@@ -220,10 +224,21 @@ class EditorWindow(QMainWindow):
             "Save every shot and build the report (Ctrl+Alt+Shift+Enter: choose which Claude pane to paste into)")
         self.finish_button.setStyleSheet("QPushButton { font-weight: 600; }")  # inherits the size, only bolds
         self.shot_label = QLabel("", self)
+        self.copy_button = QPushButton("Copy  (Ctrl+Shift+C)", self)
+        self.copy_button.setToolTip("Copy this screenshot, with your markup, to paste anywhere")
+        self.copy_button.clicked.connect(self._do_copy)
+        self.save_button = QPushButton("Save as...  (Ctrl+S)", self)
+        self.save_button.setToolTip("Save this screenshot, with your markup, as a PNG or JPG")
+        self.save_button.clicked.connect(self._do_save)
+        self.drag_handle = DragHandle(self.current_shot_id, self)
         row.addWidget(self.discard_button)
         row.addSpacing(8)
         row.addWidget(self.shot_label)
         row.addStretch(1)
+        row.addWidget(self.copy_button)
+        row.addWidget(self.save_button)
+        row.addWidget(self.drag_handle)
+        row.addSpacing(12)
         row.addWidget(self.next_button)
         row.addWidget(self.next_delayed_button)
         row.addWidget(self.finish_button)
@@ -258,6 +273,8 @@ class EditorWindow(QMainWindow):
             bind(f"Ctrl+Alt+Shift+{key}", self._do_finish_to)
         for i, role in enumerate(ROLE_ORDER, start=1):
             bind(f"Alt+{i}", lambda r=role: self._set_role_from_key(r))
+        bind("Ctrl+Shift+C", self._do_copy)
+        bind("Ctrl+S", self._do_save)
         # multi-line boxes: make sure the same keys are never taken as text
         self._enter_filter = EnterShortcutFilter(self._do_next, self._do_next_delayed, self._do_finish, self,
                                                  on_finish_to=self._do_finish_to)
@@ -654,6 +671,23 @@ class EditorWindow(QMainWindow):
     def _do_next_delayed(self) -> None:
         self._flush()
         self.next_delayed_requested.emit()
+
+    def _do_copy(self) -> None:
+        sid = self.current_shot_id()
+        if sid:
+            self._flush()
+            self.copy_requested.emit(sid)
+
+    def _do_save(self) -> None:
+        sid = self.current_shot_id()
+        if sid:
+            self._flush()
+            self.save_requested.emit(sid)
+
+    def set_drag_provider(self, provider) -> None:
+        """provider(shot id) -> path of a PNG with the markup (the controller makes it), for drag-out."""
+        self.drag_handle.provider = provider
+        self.panel.set_drag_provider(provider)
 
     def _do_finish(self) -> None:
         if not self.finish_button.isEnabled():

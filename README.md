@@ -58,6 +58,20 @@ Hover over the icon to see the hotkeys and the number of shots in the current se
 | Capture | **Ctrl+Alt+S** |
 | Delayed capture | **Ctrl+Alt+D** |
 | Show Claude (chat) | **Ctrl+Alt+Shift+C** |
+| *Your own extra hotkeys* | Settings > **More hotkeys** |
+
+**Extra hotkeys** make the tool a general screenshot utility. In Settings > *More hotkeys*, press
+**+ Add hotkey**, click the box and press the keys you want, then pick what it does:
+
+| Then... | What happens |
+|---|---|
+| Copy to clipboard | Capture, and it's ready to paste (Ctrl+V) into Discord, Word, Paint, email... No editor. |
+| Save to folder | Capture, saved as a PNG or JPG in your save folder. A small card offers *Open folder*. |
+| Copy + save | Both. |
+| Add to report | The normal report flow (like Ctrl+Alt+S). |
+| Show Claude | Straight into the Show Claude chat (like Ctrl+Alt+Shift+C). |
+
+Tick **Delay** on a row to get the countdown first (to catch menus and hover states).
 
 (`Win+Shift+S` is Windows' own Snipping Tool, so it is not used.)
 Change them in **Settings**: click a hotkey field and press the new combination. The delay length
@@ -98,6 +112,18 @@ brings it back.
 
 Redactions are applied to **both** images. The folder name is the date, time and a short name taken
 from your goal (or the first caption). You can change the reports folder in Settings.
+
+## Copy, save and drag from the editor
+
+Every shot in the editor can leave the tool, **with your markup** (pins, boxes, arrows, blur):
+
+- **Copy** (Ctrl+Shift+C): to the clipboard, ready to paste anywhere.
+- **Save as...** (Ctrl+S): a PNG or JPG wherever you like.
+- **Drag**: press the *Drag* button (or a thumbnail in the filmstrip) and drop it onto another app or a folder.
+
+Where quick saves go, the format and the file name (`Screenshot {date} {time}`; fill-ins `{date}`, `{time}`,
+`{n}`) are under Settings > *Save screenshots to* / *Format / file name*. The default folder is
+`Screenshots` next to your reports folder. Nothing is ever overwritten: a number is added instead.
 
 ## Show Claude: the instant chat
 

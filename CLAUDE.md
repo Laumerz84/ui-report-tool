@@ -81,6 +81,8 @@ Context / After.
   into a chat window that runs the user's Claude Code headless (`uireport/chat/`), with a
   `[Screenshot: <window title> - <app>]` line. Approvals come through `approve_mcp.py` as files in
   `%APPDATA%\UIReportTool\chat\approvals\`.
+- **Not everything is for you:** extra hotkeys can copy or save a capture with no report at all, and the editor has
+  Copy / Save as / Drag. Only report and Show Claude captures reach Claude.
 - **Claude Code in a terminal / IDE:** the prompt is only copied. The user pastes it with Ctrl+V.
 - The user can replace the prompt text in Settings (*Text copied on Finish*). Fill-ins:
   `{shots} {count} {goal} {report} {folder}`.

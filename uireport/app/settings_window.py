@@ -10,6 +10,7 @@ from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -38,6 +39,9 @@ from ..hotkeyspec import (
     validate_hotkey,
 )
 from ..settings import (
+    HOTKEY_ACTIONS,
+    SAVE_FORMATS,
+    DEFAULT_SAVE_NAME,
     DEFAULT_DELAY_SECONDS,
     DEFAULT_HOTKEY_CAPTURE,
     DEFAULT_HOTKEY_DELAYED,
@@ -270,6 +274,7 @@ class SettingsWindow(QDialog):
         form.addRow("", self.delayed_note)
         form.addRow("Show Claude hotkey", self._with_button(self.chat_edit, self.chat_default))
         form.addRow("", self.chat_note)
+        form.addRow("More hotkeys", self._build_custom_hotkeys(s))
         form.addRow("Delay length", self.delay_spin)
         form.addRow("Reports folder", self._with_button(self.output_edit, self.output_browse))
         form.addRow("Project folder", self._with_button(self.project_edit, self.project_browse))
@@ -278,6 +283,25 @@ class SettingsWindow(QDialog):
         form.addRow("Text copied on Finish", self._with_button(self.copy_text_edit, self.copy_text_default))
         form.addRow("", self.copy_text_help)
         form.addRow("", self.paste_check)
+
+        # -- saving (extra hotkeys "Save to folder" and the editor's Save as...)
+        default_dir = Path(s.output_root or os.path.expanduser("~")).parent / "Screenshots"
+        self.save_folder_edit = QLineEdit(s.save_folder)
+        self.save_folder_edit.setPlaceholderText(f"Default: {default_dir}")
+        self.save_folder_browse = QPushButton("Browse...")
+        self.save_folder_browse.clicked.connect(lambda: self._browse(self.save_folder_edit, "Folder for saved screenshots"))
+        self.save_format_box = QComboBox()
+        for fmt in SAVE_FORMATS:
+            self.save_format_box.addItem(fmt.upper(), fmt)
+        self.save_format_box.setCurrentIndex(max(0, SAVE_FORMATS.index(s.save_format) if s.save_format in SAVE_FORMATS else 0))
+        self.save_name_edit = QLineEdit(s.save_name)
+        self.save_name_edit.setPlaceholderText(DEFAULT_SAVE_NAME)
+        self.save_name_edit.setToolTip("Fill-ins: {date} {time} {n}. A number is added instead of overwriting.")
+        form.addRow("Save screenshots to", self._with_button(self.save_folder_edit, self.save_folder_browse))
+        form.addRow("Format / file name", self._with_button(self.save_name_edit, self.save_format_box))
+        for w in (self.save_folder_edit, self.save_name_edit):
+            w.textChanged.connect(self._on_changed)
+        self.save_format_box.currentIndexChanged.connect(self._on_changed)
 
         self.status_label = QLabel()
         self.status_label.setWordWrap(True)
@@ -344,6 +368,68 @@ class SettingsWindow(QDialog):
             edit.setText(os.path.normpath(chosen))
 
     # ------------------------------------------------------------------ state
+    # ------------------------------------------------------------------ extra hotkeys
+    def _build_custom_hotkeys(self, s: Settings) -> QWidget:
+        box = QWidget()
+        self.custom_layout = QVBoxLayout(box)
+        self.custom_layout.setContentsMargins(0, 0, 0, 0)
+        self.custom_layout.setSpacing(4)
+        self.custom_rows: list[dict] = []
+        self.add_hotkey_button = QPushButton("+ Add hotkey")
+        self.add_hotkey_button.setToolTip("A hotkey that does one thing after the capture, e.g. copy it to the clipboard")
+        self.add_hotkey_button.clicked.connect(lambda: self._add_custom_row({"hotkey": "", "action": "copy"}, focus=True))
+        self.custom_layout.addWidget(self.add_hotkey_button, 0, Qt.AlignmentFlag.AlignLeft)
+        for row in s.custom_hotkeys:
+            self._add_custom_row(row)
+        return box
+
+    def _add_custom_row(self, row: dict, focus: bool = False) -> None:
+        line = QWidget()
+        lay = QHBoxLayout(line)
+        lay.setContentsMargins(0, 0, 0, 0)
+        edit = HotkeyEdit(row.get("hotkey", ""))
+        edit.setPlaceholderText("Click, then press keys")
+        action = QComboBox()
+        for key, label in HOTKEY_ACTIONS.items():
+            action.addItem(f"then {label}", key)
+        action.setCurrentIndex(max(0, action.findData(row.get("action", "copy"))))
+        delay = QCheckBox("Delay")
+        delay.setToolTip("Count down first (Delay length), so you can open a menu before the screen freezes")
+        delay.setChecked(bool(row.get("delayed", False)))
+        remove = QToolButton()
+        remove.setText("\u2715")
+        remove.setToolTip("Remove this hotkey")
+        for w, stretch in ((edit, 2), (action, 2), (delay, 0), (remove, 0)):
+            lay.addWidget(w, stretch)
+        entry = {"widget": line, "edit": edit, "action": action, "delay": delay}
+        remove.clicked.connect(lambda: self._remove_custom_row(entry))
+        edit.hotkey_changed.connect(self._on_changed)
+        edit.recording_changed.connect(self._on_recording_changed)
+        action.currentIndexChanged.connect(self._on_changed)
+        delay.toggled.connect(self._on_changed)
+        self.custom_rows.append(entry)
+        self.custom_layout.insertWidget(self.custom_layout.count() - 1, line)
+        if focus:
+            edit.setFocus()
+        if hasattr(self, "ok_button"):  # not while the window is still being built
+            self._on_changed()
+
+    def _remove_custom_row(self, entry: dict) -> None:
+        self.custom_rows.remove(entry)
+        entry["widget"].setParent(None)
+        entry["widget"].deleteLater()
+        self._on_changed()
+
+    def _custom_hotkeys(self) -> list[dict]:
+        out = []
+        for e in self.custom_rows:
+            text = e["edit"].value()
+            if not text:
+                continue  # a new row nobody has pressed keys into yet
+            text = normalize_hotkey(text) if validate_hotkey(text) is None else text
+            out.append({"hotkey": text, "action": e["action"].currentData(), "delayed": e["delay"].isChecked()})
+        return out
+
     def current_settings(self) -> Settings:
         """The Settings the widgets currently describe (not yet saved)."""
 
@@ -363,6 +449,10 @@ class SettingsWindow(QDialog):
             last_framework_hint=self.framework_edit.text().strip(),
             copy_text_template=self.copy_text_edit.toPlainText().strip(),
             paste_into_claude=self.paste_check.isChecked(),
+            custom_hotkeys=self._custom_hotkeys() if hasattr(self, "custom_rows") else list(self._store.settings.custom_hotkeys),
+            save_folder=self.save_folder_edit.text().strip() if hasattr(self, "save_folder_edit") else self._store.settings.save_folder,
+            save_format=self.save_format_box.currentData() if hasattr(self, "save_format_box") else self._store.settings.save_format,
+            save_name=(self.save_name_edit.text().strip() or DEFAULT_SAVE_NAME) if hasattr(self, "save_name_edit") else self._store.settings.save_name,
         )
 
     def problems(self) -> list[str]:
@@ -446,7 +536,8 @@ class SettingsWindow(QDialog):
         QTimer.singleShot(0, self._sync_recording)
 
     def _sync_recording(self) -> None:
-        active = self.capture_edit.hasFocus() or self.delayed_edit.hasFocus() or self.chat_edit.hasFocus()
+        active = (self.capture_edit.hasFocus() or self.delayed_edit.hasFocus() or self.chat_edit.hasFocus()
+                  or any(e["edit"].hasFocus() for e in getattr(self, "custom_rows", [])))
         if active != self._recording:
             self._recording = active
             self.hotkey_recording.emit(active)
