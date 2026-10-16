@@ -29,6 +29,8 @@ TOAST_COPIED = "Copied — paste into Claude"
 TOAST_COPIED_CUSTOM = "Copied to the clipboard"  # the user's own copy text may not be for Claude
 TOAST_PASTED = "Pasted into Claude — press Enter to send"
 TOAST_EKXEL = "Sent to Ekxel's Claude (Ekxel was used more recently than Claude)"
+TOAST_EKXEL_UNCONFIRMED = "Sent to Ekxel's Claude (Ekxel is busy and hasn't confirmed yet)"
+TOAST_PASTE_INSTEAD = "Paste into Claude instead"
 TOAST_NOT_PASTED = "Copied — couldn't paste into Claude this time, so press Ctrl+V in its message box"
 TOAST_OPEN_FOLDER = "Open folder"
 CHOICE_FINISH = "finish"
@@ -1138,12 +1140,19 @@ class AppController(QObject):
         folder = result.folder
         pasted = ""
         to_ekxel = False
+        ekxel_unconfirmed = False
         if (copied and pane is None and self.store.settings.paste_into_claude
                 and self._ekxel_focus.prefer_ekxel()):
             try:
-                to_ekxel = self._send_to_ekxel_fn(prompt, str(folder))
+                sent = self._send_to_ekxel_fn(prompt, str(folder))
             except Exception:
                 log.exception("could not send the report to Ekxel")
+                sent = ekxel_link.SENT_FAILED
+            if sent is True or sent is False:  # an older / injected sender that answers yes or no
+                sent = ekxel_link.SENT_OK if sent else ekxel_link.SENT_FAILED
+            # a late answer is NOT a failure: Ekxel may already have it, so never paste a second copy
+            to_ekxel = sent in (ekxel_link.SENT_OK, ekxel_link.SENT_UNCONFIRMED)
+            ekxel_unconfirmed = sent == ekxel_link.SENT_UNCONFIRMED
         if to_ekxel:
             pass
         elif copied and (pane is not None or self.store.settings.paste_into_claude):
@@ -1151,7 +1160,10 @@ class AppController(QObject):
                 pasted = self._paste_fn(prompt, pane=pane) if pane is not None else self._paste_fn(prompt)
             except Exception:
                 log.exception("could not paste into Claude")
-        if copied:
+        if copied and ekxel_unconfirmed:
+            self._toast(TOAST_EKXEL_UNCONFIRMED, action_text=TOAST_PASTE_INSTEAD,
+                        action=lambda: self._paste_fn(prompt), timeout_ms=12000)
+        elif copied:
             if to_ekxel:
                 message = TOAST_EKXEL
             elif pasted == claude_paste.RESULT_PASTED:

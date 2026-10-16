@@ -4,6 +4,9 @@ Feedback and recommendations from users. Newest first.
 
 ## 2026-10-16: Finish pastes the report into both Ekxel's Claude panel and the Claude app
 
+**Status: fixed (2026-10-16).** `send_to_ekxel` now returns ok / unconfirmed / failed and sends a `request_id`. Only "failed" (Ekxel not running, too old, or it said no) falls back to pasting into Claude. A late answer is "unconfirmed": nothing is pasted, and the toast says "Sent to Ekxel's Claude (Ekxel is busy and hasn't confirmed yet)" with a "Paste into Claude instead" action. Ekxel now answers at once and delivers right after, dropping repeats (Laumerz84/sheets, same date). Checked with Ekxel's delivery slowed to 5 s: old Ekxel gives unconfirmed (3.1 s, no second paste), new Ekxel gives ok in 0.03 s with one delivery. Not done here: the redact/PII item below.
+
+
 **Observed.** One Finish put the same prompt into Ekxel's Claude panel and into the Claude desktop app's message
 box. It should go to exactly one place.
 

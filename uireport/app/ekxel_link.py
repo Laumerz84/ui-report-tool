@@ -99,19 +99,29 @@ class FocusTracker(QObject):
         return self.last["ekxel"] > self.last["claude"]
 
 
-def send_to_ekxel(prompt: str, report_dir: str, timeout_ms: int = 3000) -> bool:
-    """Hand the prompt to the running Ekxel and wait for its OK. False if Ekxel isn't running, is an
-    older version without the Claude inbox, or didn't take it - the caller then pastes into Claude."""
+SENT_OK = "ok"                    # Ekxel confirmed it took the prompt
+SENT_UNCONFIRMED = "unconfirmed"  # written to Ekxel, but its answer didn't come in time: it may well have it
+SENT_FAILED = "failed"            # Ekxel isn't running / is too old / said no: safe to paste into Claude instead
+
+
+def send_to_ekxel(prompt: str, report_dir: str, timeout_ms: int = 3000) -> str:
+    """Hand the prompt to the running Ekxel. Returns SENT_OK, SENT_UNCONFIRMED or SENT_FAILED.
+
+    Only SENT_FAILED means Ekxel certainly doesn't have it (no connection, or it answered no). Once the
+    message is written, a late or missing answer is SENT_UNCONFIRMED: Ekxel may still be busy taking it
+    (big protected workbooks take seconds), so the caller must NOT also paste into Claude. Each message
+    carries a request id so Ekxel can drop a repeat."""
     from PySide6.QtNetwork import QLocalSocket
 
     sock = QLocalSocket()
     sock.connectToServer(ekxel_server_name())
     if not sock.waitForConnected(min(timeout_ms, 800)):
-        return False
+        return SENT_FAILED
     try:
-        line = json.dumps({"rpc": "inbox", "args": {"prompt": prompt, "report_dir": str(report_dir)}}) + NL
-        sock.write(line.encode("utf-8"))
-        sock.flush()
+        args = {"prompt": prompt, "report_dir": str(report_dir), "request_id": uuid.uuid4().hex}
+        sock.write((json.dumps({"rpc": "inbox", "args": args}) + NL).encode("utf-8"))
+        if not sock.flush() and not sock.waitForBytesWritten(1000):
+            return SENT_FAILED
         buf = b""
         deadline = time.monotonic() + timeout_ms / 1000.0
         while NLB not in buf and time.monotonic() < deadline:
@@ -120,11 +130,13 @@ def send_to_ekxel(prompt: str, report_dir: str, timeout_ms: int = 3000) -> bool:
                     break
                 continue
             buf += bytes(sock.readAll())
+        if NLB not in buf:
+            return SENT_UNCONFIRMED
         try:
             reply = json.loads(buf.split(NLB, 1)[0].decode("utf-8") or "{}")
         except ValueError:
-            reply = {}
-        return reply.get("ok") is True
+            return SENT_UNCONFIRMED
+        return SENT_OK if reply.get("ok") is True else SENT_FAILED
     finally:
         sock.disconnectFromServer()
 
