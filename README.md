@@ -24,6 +24,18 @@ Everything is local. The tool makes **no network calls** (only `setup.bat` downl
 
 ## Install
 
+**Easiest: download the ready-made app** (no Python, no admin rights):
+
+1. Get `UIReportTool-<version>-windows.zip` from the
+   [latest release](https://github.com/Laumerz84/ui-report-tool/releases/latest).
+2. Unzip it anywhere (Downloads, Documents...) and double-click **`UIReportTool.exe`** in the folder.
+   The tool starts in the system tray. If Windows SmartScreen says it "protected your PC" (the app
+   isn't code-signed), click **More info** > **Run anyway**.
+
+To remove it: Quit from the tray, then delete the folder (settings are in `%APPDATA%\UIReportTool`).
+
+**From the source** (for developers, or to get changes before the next release):
+
 You need **Windows 10/11** and **Python 3.11 or newer** (the tool was built and tested with 3.14).
 
 1. **Install Python** if you do not have it:
@@ -254,6 +266,13 @@ and 1 when a copy is running that is too old to understand `--quit`. The App Lau
 
 Other flags: `--settings-path`, `--output-root`, `--no-hotkeys`, `--instance-name`, `--verbose`.
 `CONTRACT.md` describes the architecture.
+
+**Making a release:** `.venv\Scripts\python.exe -m pip install pyinstaller`, then
+`.venv\Scripts\python.exe packaging\build.py` (spec: `packaging\uireport.spec`). It writes `dist\UIReportTool\`
+(`UIReportTool.exe`, plus `uireport-approve.exe`, the console helper Show Claude uses as its approval server) and
+`dist\UIReportTool-<version>-windows.zip`. Check it with `dist\UIReportTool\UIReportTool.exe --smoke-test --offscreen
+--no-hotkeys --instance-name SmokeExe` (exit 0 = OK), then
+`gh release create v<version> dist\UIReportTool-<version>-windows.zip`.
 
 ## Ideas for later
 

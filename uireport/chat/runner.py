@@ -56,6 +56,14 @@ def console_python() -> str:
     return cand if os.path.exists(cand) else exe
 
 
+def approval_server() -> tuple[str, list[str]]:
+    """(command, args) that start the approval MCP server. The packaged app (PyInstaller) has no
+    python.exe; it ships a console helper, uireport-approve.exe, next to the main exe instead."""
+    if getattr(sys, "frozen", False):
+        return os.path.join(os.path.dirname(sys.executable), "uireport-approve.exe"), []
+    return console_python(), [str(APPROVE_SCRIPT)]
+
+
 def png_bytes(image: QImage) -> bytes:
     """The screenshot as PNG, longest side at most MAX_SIDE."""
     if max(image.width(), image.height()) > MAX_SIDE:
@@ -118,8 +126,9 @@ class ClaudeRun(QObject):
         try:
             self.approval_dir.mkdir(parents=True, exist_ok=True)
             self._cfg = self.approval_dir / f"mcp-{os.getpid()}-{self._gen}.json"
+            server, server_args = approval_server()
             self._cfg.write_text(json.dumps({"mcpServers": {"uireport": {
-                "type": "stdio", "command": console_python(), "args": [str(APPROVE_SCRIPT)],
+                "type": "stdio", "command": server, "args": server_args,
                 "env": {"UIREPORT_APPROVAL_DIR": str(self.approval_dir), "PYTHONUTF8": "1"}}}}),
                 encoding="utf-8")
         except OSError as exc:

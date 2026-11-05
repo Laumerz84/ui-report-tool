@@ -6,3 +6,7 @@ __pycache__/
 # Test scratch and caches, not source
 .test-output/
 .pytest_cache/
+
+# Packaged builds (packaging/build.py)
+build/
+dist/

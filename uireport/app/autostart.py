@@ -75,7 +75,9 @@ def project_root() -> Path:
 def build_launch_command(pythonw: Optional[Path] = None, launcher: Optional[Path] = None) -> str:
     """'"<...\\.venv\\Scripts\\pythonw.exe>" "<project>\\launch.pyw"' - both quoted, absolute.
     Defaults: pythonw next to sys.executable (pythonw.exe if it exists, else sys.executable),
-    launcher = <project root>\\launch.pyw."""
+    launcher = <project root>\\launch.pyw. The packaged app (PyInstaller) just runs its own exe."""
+    if pythonw is None and launcher is None and getattr(sys, "frozen", False):
+        return f'"{os.path.abspath(sys.executable)}"'
     if pythonw is None:
         exe = Path(sys.executable)
         candidate = exe.with_name("pythonw.exe")
