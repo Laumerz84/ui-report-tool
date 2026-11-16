@@ -470,7 +470,9 @@ class EditorWindow(QMainWindow):
             self._placed = True
         if self.isMinimized():
             self.setWindowState((self.windowState() & ~Qt.WindowState.WindowMinimized) | Qt.WindowState.WindowActive)
+        placement.exclude_from_capture(int(self.winId()), False)  # visible to screenshots again (see hide_for_capture)
         self.show()
+        placement.disable_transitions(int(self.winId()))  # set early so the next hide is instant
         self._keep_frame_inside(avail)
         self.raise_()
         self.activateWindow()
@@ -488,6 +490,8 @@ class EditorWindow(QMainWindow):
         hidden (no-op). The controller adds the compositor settle wait itself."""
         self._flush_pending()
         QToolTip.hideText()
+        placement.disable_transitions(int(self.winId()))  # hide at once: no fade-out ghost in the capture
+        placement.exclude_from_capture(int(self.winId()), True)  # and if it still lingers, it isn't in the grab
         self.hide()
         # flush paint / window-system events; user input is left queued so a second, repeated
         # key press cannot re-enter the controller from inside this call

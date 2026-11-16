@@ -211,3 +211,51 @@ def bring_to_front(hwnd: int, api: Any = None) -> bool:
         return w.foreground() == hwnd
     except Exception:
         return False
+
+
+
+def _real_windows() -> bool:
+    try:
+        from PySide6.QtGui import QGuiApplication
+
+        return QGuiApplication.platformName() == "windows"
+    except Exception:  # noqa: BLE001
+        return False
+
+
+DWMWA_TRANSITIONS_FORCEDISABLED = 3
+
+
+def disable_transitions(hwnd: int) -> bool:
+    """Turn off Windows' open/close animation for this window, so hide() removes it from the screen at
+    once. Without it the editor fades out for ~200 ms and a capture started meanwhile (Ctrl+Alt+S while
+    the editor is open) shows a half-faded ghost of it. Best effort; never raises."""
+    if not _real_windows():
+        return False  # offscreen / other platforms: winId() is not an HWND
+    try:
+        import ctypes
+
+        value = ctypes.c_int(1)
+        return ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            int(hwnd), DWMWA_TRANSITIONS_FORCEDISABLED, ctypes.byref(value), ctypes.sizeof(value)) == 0
+    except Exception:  # noqa: BLE001 - not Windows / no DWM
+        return False
+
+
+WDA_NONE, WDA_EXCLUDEFROMCAPTURE = 0x0, 0x11
+
+
+def exclude_from_capture(hwnd: int, exclude: bool) -> bool:
+    """Keep this window out of screen grabs (SetWindowDisplayAffinity; Win10 2004+). Set while a capture
+    runs, so even a window Windows is still fading out can't show up as a ghost in the shot; cleared when
+    the editor is shown again. Best effort; never raises."""
+    if not _real_windows():
+        return False  # offscreen / other platforms: winId() is not an HWND
+    try:
+        import ctypes
+
+        return bool(ctypes.windll.user32.SetWindowDisplayAffinity(
+            int(hwnd), WDA_EXCLUDEFROMCAPTURE if exclude else WDA_NONE))
+    except Exception:  # noqa: BLE001
+        return False
+
