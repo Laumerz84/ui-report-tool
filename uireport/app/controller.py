@@ -674,6 +674,7 @@ class AppController(QObject):
         then capture.start(mode). Otherwise capture.start(mode) immediately (no delay)."""
         if self._shut_down or self._capture_busy():
             return
+        self._ekxel_focus.poll()
         mode = CaptureMode(mode)
         if self._finish_waiting is not None:   # a new capture: Finish (waiting for Ekxel) is called off
             self._finish_waiting = None
@@ -1071,6 +1072,7 @@ class AppController(QObject):
         session = self._session
         if not session.shots:
             return
+        self._ekxel_focus.poll()
         self._finish_cancelled = False
         if any(self._anon_jobs.busy(s.id) or anon.is_pending(s) for s in session.shots):
             self._finish_waiting = (pane,)   # Ekxel is still drawing an anonymized screenshot: finish right after
@@ -1107,13 +1109,15 @@ class AppController(QObject):
             self._on_write_done(None, f"{type(exc).__name__}: {exc}")
             return
         if self._paste_pane is not None or self.store.settings.paste_into_claude:
-            try:  # while the worker writes: find Claude's message box so the paste is instant
+            try:  # while the worker writes: find the AI app's message box so the paste is instant
                 if self._paste_pane is not None:
                     self._prewarm_paste_fn(self._paste_pane)
+                elif self._prewarm_paste_fn is claude_paste.prewarm:
+                    self._prewarm_paste_fn(prefer=self._ekxel_focus.preferred_ai())
                 else:
                     self._prewarm_paste_fn()
             except Exception:
-                log.exception("could not look up Claude's message box")
+                log.exception("could not look up the AI message box")
 
     def _on_write_progress(self, done: int, total: int) -> None:
         if self._finishing and total > 1 and done < total:
@@ -1157,9 +1161,19 @@ class AppController(QObject):
             pass
         elif copied and (pane is not None or self.store.settings.paste_into_claude):
             try:  # a picked pane is pasted into even with the "paste on Finish" option off
-                pasted = self._paste_fn(prompt, pane=pane) if pane is not None else self._paste_fn(prompt)
+                if pane is not None:
+                    pasted = self._paste_fn(prompt, pane=pane)
+                elif self._paste_fn is claude_paste.paste_into_claude:
+                    pasted = self._paste_fn(prompt, prefer=self._ekxel_focus.preferred_ai())
+                else:
+                    pasted = self._paste_fn(prompt)
             except Exception:
-                log.exception("could not paste into Claude")
+                log.exception("could not paste into the AI app")
+        target_app = (
+            claude_paste.last_target_app()
+            if self._paste_fn is claude_paste.paste_into_claude
+            else "Claude"
+        )
         if copied and ekxel_unconfirmed:
             self._toast(TOAST_EKXEL_UNCONFIRMED, action_text=TOAST_PASTE_INSTEAD,
                         action=lambda: self._paste_fn(prompt), timeout_ms=12000)
@@ -1167,10 +1181,14 @@ class AppController(QObject):
             if to_ekxel:
                 message = TOAST_EKXEL
             elif pasted == claude_paste.RESULT_PASTED:
-                message = TOAST_PASTED
+                message = TOAST_PASTED if target_app == "Claude" else f"Pasted into {target_app} — press Enter to send"
             elif pasted in (claude_paste.RESULT_NOT_FOCUSED, claude_paste.RESULT_NO_PROMPT,
                             claude_paste.RESULT_NOT_LANDED):
-                message = TOAST_NOT_PASTED
+                message = (
+                    TOAST_NOT_PASTED
+                    if target_app == "Claude"
+                    else f"Copied — couldn't paste into {target_app} this time, so press Ctrl+V in its message box"
+                )
             else:
                 message = TOAST_COPIED if not template.strip() else TOAST_COPIED_CUSTOM
             self._toast(

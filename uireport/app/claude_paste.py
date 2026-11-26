@@ -33,10 +33,19 @@ RESULT_DISABLED = "disabled"
 BLOCK_ENV = "UIREPORT_NO_PASTE"
 ELECTRON_CLASS = "Chrome_WidgetWin_1"  # the desktop app's top-level window; the CLI never owns one
 PROMPT_NAME = "Prompt"  # accessible name of Claude's message box (a ProseMirror editor)
+ANTIGRAVITY_INPUT_NAME = "Message input"  # accessible name of Antigravity's chat input (ComboBoxControl)
+ANTIGRAVITY_CONV_PREFIX = "Conversation: "  # button in each Antigravity split-pane header
 STEP_S = 0.01
 FOCUS_WAIT_STEPS, MODIFIER_WAIT_STEPS, VERIFY_STEPS = 100, 200, 150  # up to 1 s, 2 s, 1.5 s
 CARET_SETTLE_S = 0.02  # Chromium moves the caret a frame after the accessibility SetFocus
 VERIFY_CHARS = 40  # the start of the text that must newly appear in the box
+
+_last_target_app: str = "Claude"  # "Claude" | "Antigravity" for the most recent paste attempt
+
+
+def last_target_app() -> str:
+    """Display name ('Claude' or 'Antigravity') of the AI window targeted by the last paste attempt."""
+    return _last_target_app
 
 
 @dataclass
@@ -51,11 +60,12 @@ class Window:
 
 @dataclass
 class Pane:
-    """One of a Claude window's chat panes (the app shows up to two side by side)."""
+    """One of an AI window's chat panes (Claude or Antigravity split panes)."""
     hwnd: int
-    name: str  # accessible name of the pane group: "Primary pane" / "Secondary pane"
+    name: str  # Claude: "Primary pane" / "Secondary pane"; Antigravity: "agy:0" / "agy:1"
     title: str  # the chat shown in it ("" when it isn't showing one)
     left: int  # screen x, to call them left / right
+    app: str = "claude"  # "claude" | "antigravity"
 
     @property
     def key(self) -> tuple:
@@ -71,8 +81,8 @@ class PasteDeps:
     modifiers_down: Callable[[], bool]
     send_ctrl_v: Callable[[], bool]
     sleep: Callable[[float], None]
-    # both take a window hwnd (its first message box) or a Pane.key (that pane's box)
-    focus_prompt: Callable[[object], bool]  # cursor into Claude's message box; False if there is none
+    # both take a window hwnd (its active/first message box) or a Pane.key (that pane's box)
+    focus_prompt: Callable[[object], bool]  # cursor into the message box; False if there is none
     prompt_text: Callable[[object], Optional[str]]  # the box's text, None if it can't be read
 
 
@@ -82,33 +92,199 @@ def is_claude_desktop(w: Window) -> bool:
             and w.visible and bool(w.title.strip()))
 
 
+def is_antigravity(w: Window) -> bool:
+    """Antigravity's main desktop window."""
+    return (os.path.basename(w.exe).lower() == "antigravity.exe" and w.class_name == ELECTRON_CLASS
+            and w.visible and bool(w.title.strip()))
+
+
+def ai_app_kind(w: Window) -> Optional[str]:
+    """'claude', 'antigravity', or None."""
+    if is_claude_desktop(w):
+        return "claude"
+    if is_antigravity(w):
+        return "antigravity"
+    return None
+
+
+def is_ai_desktop(w: Window) -> bool:
+    """Either the Claude desktop app or Antigravity."""
+    return ai_app_kind(w) is not None
+
+
+def app_label(kind: Optional[str]) -> str:
+    return "Antigravity" if kind == "antigravity" else "Claude"
+
+
+def _select_target_window(
+    windows: list,
+    pane: Optional[Pane] = None,
+    prefer: Optional[str] = None,
+) -> Optional[Window]:
+    """Pick the most recently active AI window (Claude or Antigravity).
+
+    `windows` is already in Win32 Z-order (most recently active non-minimised window first).
+    `prefer` ('claude' | 'antigravity' from FocusTracker) breaks ties when the app the user was
+    using most recently was minimised while an older window of the other app stayed un-minimised."""
+    ai = [w for w in windows if is_ai_desktop(w)]
+    if pane is not None:
+        ai = [w for w in ai if w.hwnd == pane.hwnd]
+        return ai[0] if ai else None
+    if not ai:
+        return None
+    open_wins = [w for w in ai if not w.iconic]
+    if open_wins:
+        kinds_open = {ai_app_kind(w) for w in open_wins}
+        if prefer in ("claude", "antigravity") and prefer not in kinds_open:
+            minimised_pref = [w for w in ai if w.iconic and ai_app_kind(w) == prefer]
+            if minimised_pref:
+                return minimised_pref[0]
+        return open_wins[0]
+    if prefer in ("claude", "antigravity"):
+        pref_wins = [w for w in ai if ai_app_kind(w) == prefer]
+        if pref_wins:
+            return pref_wins[0]
+    return ai[0]
+
+
 def _blocked() -> bool:
     return os.environ.get(BLOCK_ENV) == "1" or os.environ.get("QT_QPA_PLATFORM", "").lower() == "offscreen"
 
 
-def prewarm(pane: Optional[Pane] = None) -> None:
-    """Find Claude's message box ahead of time (called while the report is being written), so
-    the paste itself doesn't have to search Claude's accessibility tree."""
+def prewarm(pane: Optional[Pane] = None, prefer: Optional[str] = None) -> None:
+    """Find the target AI app's message box ahead of time (called while the report is being written), so
+    the paste itself doesn't have to search the accessibility tree."""
     if _blocked():
         return
     try:
         if pane is not None:
+            _BOX.invalidate(pane.key)
             _BOX.control(pane.key)
             return
-        target = next((w for w in _windows() if is_claude_desktop(w)), None)
+        target = _select_target_window(_windows(), prefer=prefer)
         if target is not None:
+            _BOX.invalidate(target.hwnd)
             _BOX.control(target.hwnd)
     except Exception:  # noqa: BLE001 - a warm-up must never break Finish
         pass
 
 
-PANE_SUFFIX = " pane"  # the pane groups are named "Primary pane" / "Secondary pane"
-TITLE_SUFFIX = ", rename session"  # each pane's chat-title button: "<title>, rename session"
+PANE_SUFFIX = " pane"  # Claude's pane groups are named "Primary pane" / "Secondary pane"
+TITLE_SUFFIX = ", rename session"  # each Claude pane's chat-title button: "<title>, rename session"
+
+
+def _walk_pruned(root, max_depth: int = 42, skip_types: tuple = ("ListItemControl",)):
+    """Walk UIA descendants while skipping message-list items (hundreds of transcript rows)."""
+    stack = [(root, 0)]
+    while stack:
+        ctrl, depth = stack.pop()
+        yield ctrl, depth
+        if depth >= max_depth:
+            continue
+        try:
+            children = ctrl.GetChildren()
+        except Exception:
+            continue
+        for ch in reversed(children):
+            try:
+                ct = ch.ControlTypeName
+            except Exception:
+                continue
+            if ct in skip_types:
+                continue
+            stack.append((ch, depth + 1))
+
+
+def _antigravity_pane_title(box) -> str:
+    """Read 'Conversation: <title>' from the enclosing Antigravity split-pane header."""
+    cur = box
+    pane_ctrl = None
+    for _ in range(14):
+        try:
+            cur = cur.GetParentControl()
+        except Exception:
+            cur = None
+        if cur is None:
+            break
+        try:
+            if "group/pane" in (cur.ClassName or ""):
+                pane_ctrl = cur
+                break
+        except Exception:
+            continue
+    if pane_ctrl is None:
+        return ""
+    for ch, _d in _walk_pruned(pane_ctrl, max_depth=7):
+        try:
+            nm = ch.Name or ""
+            if ch.ControlTypeName == "ButtonControl" and nm.startswith(ANTIGRAVITY_CONV_PREFIX):
+                return nm[len(ANTIGRAVITY_CONV_PREFIX):].strip()
+        except Exception:
+            continue
+    return ""
+
+
+def _antigravity_panes(hwnd: int) -> list:
+    """Return [(Pane, box_control, has_focus), ...] left-to-right for an Antigravity window."""
+    import uiautomation as auto
+
+    root = auto.ControlFromHandle(hwnd)
+    probe = root.ComboBoxControl(Name=ANTIGRAVITY_INPUT_NAME, searchDepth=42)
+    if not probe.Exists(1.5, 0.05):
+        return []
+    raw_boxes = [
+        c for c, _d in _walk_pruned(root, max_depth=42)
+        if c.ControlTypeName == "ComboBoxControl" and (c.Name or "") == ANTIGRAVITY_INPUT_NAME
+    ]
+    items = []
+    for b in raw_boxes:
+        try:
+            rect = b.BoundingRectangle
+            if rect.right <= rect.left or rect.bottom <= rect.top:
+                continue
+            left = int(rect.left)
+        except Exception:
+            continue
+        focused = False
+        try:
+            focused = bool(b.HasKeyboardFocus)
+        except Exception:
+            pass
+        items.append((left, _antigravity_pane_title(b), b, focused))
+    items.sort(key=lambda item: item[0])
+    return [
+        (Pane(hwnd=hwnd, name=f"agy:{idx}", title=title, left=left, app="antigravity"), b, focused)
+        for idx, (left, title, b, focused) in enumerate(items)
+    ]
+
+
+def _pick_antigravity_box(hwnd: int, items: list):
+    """Pick the active split pane's input box in Antigravity."""
+    if not items:
+        return None
+    if len(items) == 1:
+        return items[0][1]
+    for _pane, box, focused in items:
+        if focused:
+            return box
+    win_title = ""
+    try:
+        buf = ctypes.create_unicode_buffer(512)
+        if ctypes.windll.user32.GetWindowTextW(hwnd, buf, 512) > 0:
+            win_title = buf.value
+    except Exception:
+        pass
+    head = win_title.split(" - ")[0].rstrip(".…").strip()
+    if head:
+        for pane, box, _focused in items:
+            if pane.title and pane.title.startswith(head):
+                return box
+    return items[0][1]
 
 
 def list_panes() -> list:
-    """The chat panes of every open Claude desktop window (topmost window first, left to right
-    within a window). Read-only: nothing is focused or clicked. [] if Claude isn't open."""
+    """The chat panes of every open Claude desktop and Antigravity window (topmost window first,
+    left to right within a window). Read-only: nothing is focused or clicked. [] if none are open."""
     if _blocked():
         return []
     try:
@@ -117,32 +293,44 @@ def list_panes() -> list:
         return []
     out = []
     for w in _windows():
-        if not is_claude_desktop(w):
-            continue
-        try:
-            root = auto.ControlFromHandle(w.hwnd)
-            found = [c for c, _d in auto.WalkControl(root, maxDepth=22)
-                     if c.ControlTypeName == "GroupControl" and (c.Name or "").endswith(PANE_SUFFIX)]
-            panes = []
-            for group in found:
-                btn = group.ButtonControl(searchDepth=20, Compare=lambda c, _d: (c.Name or "").endswith(TITLE_SUFFIX))
-                title = btn.Name[: -len(TITLE_SUFFIX)] if btn.Exists(0.3, 0.05) else ""
-                panes.append(Pane(hwnd=w.hwnd, name=group.Name, title=title, left=group.BoundingRectangle.left))
-            out.extend(sorted(panes, key=lambda p: p.left))
-        except Exception:  # noqa: BLE001 - an unreadable window just isn't offered
-            continue
+        kind = ai_app_kind(w)
+        if kind == "claude":
+            try:
+                root = auto.ControlFromHandle(w.hwnd)
+                found = [c for c, _d in auto.WalkControl(root, maxDepth=22)
+                         if c.ControlTypeName == "GroupControl" and (c.Name or "").endswith(PANE_SUFFIX)]
+                panes = []
+                for group in found:
+                    btn = group.ButtonControl(searchDepth=20, Compare=lambda c, _d: (c.Name or "").endswith(TITLE_SUFFIX))
+                    title = btn.Name[: -len(TITLE_SUFFIX)] if btn.Exists(0.3, 0.05) else ""
+                    panes.append(Pane(hwnd=w.hwnd, name=group.Name, title=title,
+                                      left=group.BoundingRectangle.left, app="claude"))
+                out.extend(sorted(panes, key=lambda p: p.left))
+            except Exception:  # noqa: BLE001 - an unreadable window just isn't offered
+                continue
+        elif kind == "antigravity":
+            try:
+                out.extend(pane for pane, _box, _focused in _antigravity_panes(w.hwnd))
+            except Exception:  # noqa: BLE001
+                continue
     return out
 
 
 def pane_labels(panes: list) -> list:
-    """Menu text for each pane: 'Left: <chat>' / 'Right: <chat>', 'Window 2 ...' when there are several."""
+    """Menu text for each pane: 'Left: <chat>' / 'Right: <chat>', 'Window 2 ...', prefixed with app name if both are open."""
     hwnds = list(dict.fromkeys(p.hwnd for p in panes))
+    apps = {getattr(p, "app", "claude") for p in panes}
+    multi_app = len(apps) > 1
     labels = []
     for p in panes:
+        kind = getattr(p, "app", "claude")
+        app_name = app_label(kind)
         same = [q for q in panes if q.hwnd == p.hwnd]
+        app_hwnds = [h for h in hwnds if any(q.hwnd == h and getattr(q, "app", "claude") == kind for q in panes)]
         side = "" if len(same) == 1 else ("Left" if p is same[0] else "Right" if p is same[-1] else "Middle")
-        where = (f"Window {hwnds.index(p.hwnd) + 1} " if len(hwnds) > 1 else "") + side
-        where = where.strip() or "Claude"
+        win_part = f"Window {app_hwnds.index(p.hwnd) + 1} " if len(app_hwnds) > 1 else ""
+        prefix = f"{app_name} " if multi_app else ""
+        where = (prefix + win_part + side).strip() or app_name
         labels.append(f"{where}: {p.title or '(no chat open)'}")
     return labels
 
@@ -151,20 +339,24 @@ def _norm(text: str) -> str:
     return " ".join(str(text).split())  # the message box turns newlines into paragraphs
 
 
-def paste_into_claude(text: str, deps: Optional[PasteDeps] = None, pane: Optional[Pane] = None) -> str:
-    """Bring an open Claude desktop window forward, put the cursor in its message box (or in
-    `pane`'s, when given) and press Ctrl+V once (`text` is what is on the clipboard).
-    Returns a RESULT_*."""
+def paste_into_claude(
+    text: str,
+    deps: Optional[PasteDeps] = None,
+    pane: Optional[Pane] = None,
+    prefer: Optional[str] = None,
+) -> str:
+    """Bring the most recently active AI desktop window (Claude or Antigravity) forward, put the
+    cursor in its message box (or in `pane`'s, when given) and press Ctrl+V once (`text` is what
+    is on the clipboard). Returns a RESULT_*."""
+    global _last_target_app
     if deps is None:
         if _blocked():
             return RESULT_DISABLED
         deps = default_deps()
-    claude = [w for w in deps.windows() if is_claude_desktop(w)]
-    if pane is not None:
-        claude = [w for w in claude if w.hwnd == pane.hwnd]
-    target = claude[0] if claude else None
+    target = _select_target_window(deps.windows(), pane=pane, prefer=prefer)
     if target is None:
         return RESULT_NOT_OPEN
+    _last_target_app = app_label(ai_app_kind(target))
     box = pane.key if pane is not None else target.hwnd
     if target.iconic:
         deps.restore(target.hwnd)
@@ -266,18 +458,44 @@ def _pumping_sleep(seconds: float) -> None:
         time.sleep(min(0.01, left))
 
 
+def _hwnd_app_kind(hwnd: int) -> Optional[str]:
+    try:
+        from ..capture import windowinfo as wi
+
+        exe = wi._exe_path_of_pid(wi._pid_of(int(hwnd))) or ""
+    except Exception:  # noqa: BLE001
+        return None
+    base = os.path.basename(exe).lower()
+    if base == "antigravity.exe":
+        return "antigravity"
+    if base == "claude.exe":
+        return "claude"
+    return None
+
+
 def _search_prompt(key):
-    """Claude's message box via UI Automation (about 0.2 s), or None. `key` is a window hwnd
-    (its first box) or a Pane.key (hwnd, pane name) for that pane's box."""
+    """Claude's or Antigravity's message box via UI Automation, or None. `key` is a window hwnd
+    (its active/first box) or a Pane.key (hwnd, pane name) for that pane's box."""
     import uiautomation as auto
 
-    if isinstance(key, tuple):
-        hwnd, pane_name = key
+    hwnd = key[0] if isinstance(key, tuple) else key
+    pane_name = key[1] if isinstance(key, tuple) else None
+    is_agy = (isinstance(pane_name, str) and pane_name.startswith("agy:")) or _hwnd_app_kind(hwnd) == "antigravity"
+    if is_agy:
+        items = _antigravity_panes(hwnd)
+        if pane_name is not None:
+            for pane, box, _focused in items:
+                if pane.name == pane_name:
+                    return box
+            return None
+        return _pick_antigravity_box(hwnd, items)
+
+    if pane_name is not None:
         root = auto.ControlFromHandle(hwnd).GroupControl(Name=pane_name, searchDepth=25)
         if not root.Exists(1.0, 0.05):
             return None
     else:
-        root = auto.ControlFromHandle(key)
+        root = auto.ControlFromHandle(hwnd)
     box = root.EditControl(Name=PROMPT_NAME, searchDepth=40)
     if box.Exists(1.5, 0.05):  # the first query also wakes Chromium's accessibility tree
         return box
@@ -286,20 +504,58 @@ def _search_prompt(key):
 
 
 def _prompt_still_valid(box) -> bool:
-    """A remembered box is reused only while Claude still shows that same element."""
+    """A remembered box is reused only while the app still shows that same element."""
     try:
         el = box.Element
-        return el.CurrentName == PROMPT_NAME or "ProseMirror" in (el.CurrentClassName or "")
-    except Exception:  # noqa: BLE001 - stale element: Claude re-rendered it
+        nm = el.CurrentName or ""
+        cls = el.CurrentClassName or ""
+        if nm not in (PROMPT_NAME, ANTIGRAVITY_INPUT_NAME) and "ProseMirror" not in cls:
+            return False
+        try:
+            r = el.CurrentBoundingRectangle
+            return (r.right - r.left) > 0 and (r.bottom - r.top) > 0
+        except AttributeError:
+            return True
+    except Exception:  # noqa: BLE001 - stale element: re-rendered
         return False
 
 
+def _box_text(box) -> Optional[str]:
+    """Read the text currently inside Claude's EditControl or Antigravity's ComboBoxControl."""
+    if getattr(box, "ControlTypeName", "") == "ComboBoxControl":
+        try:
+            val = box.GetValuePattern().Value or ""
+            if val:
+                return val
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            import uiautomation as auto
+
+            parts = [c.Name for c, d in auto.WalkControl(box, maxDepth=6)
+                     if d > 0 and c.ControlTypeName == "TextControl" and c.Name]
+            if parts:
+                return " ".join(parts)
+            tp = box.GetPattern(auto.PatternId.TextPattern)
+            if tp is not None:
+                doc = tp.DocumentRange.GetText(4000) or ""
+                if doc and doc.strip() != ANTIGRAVITY_INPUT_NAME:
+                    return doc
+        except Exception:  # noqa: BLE001
+            pass
+        return ""
+    return box.GetValuePattern().Value
+
+
 class _PromptBox:
-    """Claude's message box, remembered between pastes (searching for it is the slow part)."""
+    """The target AI app's message box, remembered within a paste (searching for it is the slow part)."""
 
     def __init__(self, search: Callable = _search_prompt, is_valid: Callable = _prompt_still_valid) -> None:
         self._search, self._is_valid = search, is_valid
         self._found: dict[object, object] = {}  # hwnd or Pane.key -> box
+
+    def invalidate(self, key) -> None:
+        self._found.pop(key, None)
 
     def control(self, key):
         box = self._found.get(key)
@@ -325,7 +581,7 @@ class _PromptBox:
     def text(self, key) -> Optional[str]:
         try:
             box = self.control(key)
-            return None if box is None else box.GetValuePattern().Value
+            return None if box is None else _box_text(box)
         except Exception:  # noqa: BLE001
             return None
 

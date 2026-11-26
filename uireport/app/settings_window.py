@@ -260,10 +260,14 @@ class SettingsWindow(QDialog):
         self.copy_text_default.setText("Default")
         self.copy_text_default.setToolTip("Go back to the built-in text for Claude")
         self.copy_text_default.clicked.connect(self.copy_text_edit.clear)
-        self.paste_check = QCheckBox("On Finish, also paste it into the Claude app if it's open (you press Enter)")
+        self.paste_check = QCheckBox(
+            "On Finish, also paste into Claude or Antigravity if open (most recently used; you press Enter)"
+        )
         self.paste_check.setChecked(bool(s.paste_into_claude))
-        self.paste_check.setToolTip("Brings the Claude desktop app to the front and pastes the text into it. "
-                                    "Claude is never started, and nothing is sent until you press Enter.")
+        self.paste_check.setToolTip(
+            "Brings whichever of Claude desktop or Antigravity was open most recently to the front and pastes "
+            "the text into its message box. Neither app is started, and nothing is sent until you press Enter."
+        )
 
         form = QFormLayout()
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)

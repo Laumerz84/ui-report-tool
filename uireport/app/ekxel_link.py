@@ -61,26 +61,29 @@ def _foreground_info() -> Optional[tuple[str, str, str]]:
 
 
 def classify(exe: str, title: str, cls: str) -> Optional[str]:
-    """'ekxel', 'claude' or None for a foreground window."""
+    """'ekxel', 'claude', 'antigravity' or None for a foreground window."""
     base = os.path.basename(exe).lower()
     if base in ("pythonw.exe", "python.exe") and "Ekxel" in title:
         return "ekxel"
     if base == "claude.exe" and cls.startswith("Chrome_WidgetWin") and title.strip():
         return "claude"
+    if base == "antigravity.exe" and cls.startswith("Chrome_WidgetWin") and title.strip():
+        return "antigravity"
     return None
 
 
 class FocusTracker(QObject):
-    """Remembers when Ekxel and the Claude desktop app were last in the foreground."""
+    """Remembers when Ekxel, the Claude desktop app and Antigravity were last in the foreground."""
 
     def __init__(self, parent: Optional[QObject] = None, info=_foreground_info) -> None:
         super().__init__(parent)
         self._info = info
-        self.last = {"ekxel": 0.0, "claude": 0.0}
+        self.last = {"ekxel": 0.0, "claude": 0.0, "antigravity": 0.0}
         self._timer = QTimer(self)
         self._timer.setInterval(POLL_MS)
         self._timer.timeout.connect(self.poll)
         if sys.platform == "win32":
+            self.poll()
             self._timer.start()
 
     def poll(self) -> None:
@@ -95,8 +98,17 @@ class FocusTracker(QObject):
             self.last[kind] = time.monotonic()
 
     def prefer_ekxel(self) -> bool:
-        """True when an Ekxel window was active more recently than the Claude desktop app."""
-        return self.last["ekxel"] > self.last["claude"]
+        """True when an Ekxel window was active more recently than Claude or Antigravity."""
+        return self.last["ekxel"] > max(self.last["claude"], self.last["antigravity"])
+
+    def preferred_ai(self) -> Optional[str]:
+        """'antigravity' or 'claude' when one was seen in the foreground more recently, else None."""
+        c, a = self.last["claude"], self.last["antigravity"]
+        if a > c:
+            return "antigravity"
+        if c > a:
+            return "claude"
+        return None
 
 
 SENT_OK = "ok"                    # Ekxel confirmed it took the prompt

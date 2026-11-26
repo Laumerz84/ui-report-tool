@@ -203,3 +203,63 @@ def test_the_real_paste_is_disabled_for_the_whole_test_run(monkeypatch):
     monkeypatch.delenv(cp.BLOCK_ENV, raising=False)
     assert cp.paste_into_claude(TEXT) == cp.RESULT_DISABLED  # the offscreen platform blocks it as well
     assert called == []
+
+
+ANTIGRAVITY_EXE = r"C:\Users\andre\AppData\Local\Programs\antigravity\Antigravity.exe"
+
+
+def test_whichever_ai_app_was_most_recently_open_wins():
+    # Antigravity topmost in z-order -> pastes into Antigravity
+    f1 = Fake([win(11, ANTIGRAVITY_EXE, "Setup - Antigravity"), win(7, CLAUDE_EXE)], fg_sequence=[11])
+    assert cp.paste_into_claude(TEXT, f1.deps()) == cp.RESULT_PASTED
+    assert ("focus", 11) in f1.log and cp.last_target_app() == "Antigravity"
+
+    # Claude topmost in z-order -> pastes into Claude
+    f2 = Fake([win(7, CLAUDE_EXE), win(11, ANTIGRAVITY_EXE, "Setup - Antigravity")], fg_sequence=[7])
+    assert cp.paste_into_claude(TEXT, f2.deps()) == cp.RESULT_PASTED
+    assert ("focus", 7) in f2.log and cp.last_target_app() == "Claude"
+
+    # Minimised Antigravity still wins over an older open Claude when FocusTracker saw Antigravity last
+    f3 = Fake([win(7, CLAUDE_EXE), win(11, ANTIGRAVITY_EXE, "Setup - Antigravity", iconic=True)], fg_sequence=[11])
+    assert cp.paste_into_claude(TEXT, f3.deps(), prefer="antigravity") == cp.RESULT_PASTED
+    assert ("restore", 11) in f3.log and ("focus", 11) in f3.log and cp.last_target_app() == "Antigravity"
+
+
+def test_focus_tracker_tracks_antigravity_claude_and_ekxel(qapp, monkeypatch):
+    from uireport.app import ekxel_link as el
+
+    seq = [
+        (r"C:\Python\pythonw.exe", "Book1 - Ekxel", "Qt6110QWindowIcon"),
+        (ANTIGRAVITY_EXE, "Chat - Antigravity", cp.ELECTRON_CLASS),
+        (CLAUDE_EXE, "Claude", cp.ELECTRON_CLASS),
+    ]
+    cur = [seq[0]]
+    clock = [100.0]
+
+    def tick():
+        clock[0] += 1.0
+        return clock[0]
+
+    monkeypatch.setattr(el.time, "monotonic", tick)
+    tracker = el.FocusTracker(info=lambda: cur[0])
+    try:
+        assert tracker.prefer_ekxel() is True and tracker.preferred_ai() is None
+        cur[0] = seq[1]
+        tracker.poll()
+        assert tracker.prefer_ekxel() is False and tracker.preferred_ai() == "antigravity"
+        cur[0] = seq[2]
+        tracker.poll()
+        assert tracker.prefer_ekxel() is False and tracker.preferred_ai() == "claude"
+    finally:
+        tracker._timer.stop()
+
+
+def test_pane_labels_distinguish_apps_when_both_are_open():
+    claude_only = [cp.Pane(1, "Primary pane", "Alpha", 0, "claude"), cp.Pane(1, "Secondary pane", "Beta", 500, "claude")]
+    assert cp.pane_labels(claude_only) == ["Left: Alpha", "Right: Beta"]
+    both = [
+        cp.Pane(2, "agy:0", "Laptop Setup", 400, "antigravity"),
+        cp.Pane(2, "agy:1", "Relay", 1100, "antigravity"),
+        cp.Pane(1, "Primary pane", "Alpha", 0, "claude"),
+    ]
+    assert cp.pane_labels(both) == ["Antigravity Left: Laptop Setup", "Antigravity Right: Relay", "Claude: Alpha"]
